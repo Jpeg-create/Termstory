@@ -90,6 +90,52 @@ def disambiguate_project_names(projects: List[Project]) -> Dict[int, str]:
                 display_names[p.id] = f"{p.name} ({parent_dir})"
     return display_names
 
+def find_project_root(path: str) -> str:
+    """Find the root project directory for a given path by looking for repository/project markers, 
+    stopping at home or root directories."""
+    # Expand and make absolute
+    abs_path = os.path.abspath(os.path.expanduser(path))
+    home = os.path.abspath(os.path.expanduser("~"))
+    
+    # If the path is home or root, just return it
+    if abs_path == home or abs_path == "/":
+        return abs_path
+        
+    current = abs_path
+    
+    # Marker files/directories indicating a project root
+    project_markers = {
+        # Repositories
+        ".git", ".hg", ".svn",
+        # Project files
+        "package.json", "pom.xml", "build.gradle", "Cargo.toml", 
+        "requirements.txt", "setup.py", "Makefile", "go.mod", 
+        "CMakeLists.txt", "pyproject.toml"
+    }
+    
+    while current and current != home and current != "/":
+        try:
+            # Check if any marker exists in the current directory
+            files = os.listdir(current)
+            if any(marker in files for marker in project_markers):
+                return current
+        except Exception:
+            pass
+            
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+        
+    # Fallback logic if no project markers were found:
+    # Check if the path is inside a common project workspace folder (e.g., ~/Projects/...)
+    rel_to_home = os.path.relpath(abs_path, home)
+    parts = rel_to_home.split(os.sep)
+    if len(parts) >= 2 and parts[0].lower() in {"projects", "workspace", "workspace_py", "repos", "git", "code", "dev", "development"}:
+        return os.path.join(home, parts[0], parts[1])
+        
+    return abs_path
+
 def detect_projects(sessions: List[Session]) -> List[Project]:
     """Detect projects from cd commands in sessions, humanize names, and update links in sessions/commands"""
     projects_dict = {}
@@ -112,25 +158,30 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
             last_cd = cd_commands[-1]
             path = extract_cd_path(last_cd.command)
             if path:
-                # Normalize path to match duplicate projects
-                norm_path = os.path.expanduser(path)
-                norm_path = os.path.abspath(norm_path)
+                # Resolve the project root path
+                project_root = find_project_root(path)
                 
-                if norm_path not in projects_dict:
-                    name = humanize_project_name(path)
+                if project_root not in projects_dict:
+                    # Convert absolute project root back to a user-friendly path (using ~ if possible)
+                    home = os.path.expanduser("~")
+                    display_path = project_root
+                    if project_root.startswith(home):
+                        display_path = project_root.replace(home, "~", 1)
+                        
+                    name = humanize_project_name(project_root)
                     project = Project(
                         id=project_id_counter,
                         name=name,
-                        path=path,
+                        path=display_path,
                         first_seen=session.start_time,
                         last_seen=session.end_time,
                         session_count=1,
                         total_time=session.duration_seconds
                     )
-                    projects_dict[norm_path] = project
+                    projects_dict[project_root] = project
                     project_id_counter += 1
                 else:
-                    project = projects_dict[norm_path]
+                    project = projects_dict[project_root]
                     project.first_seen = min(project.first_seen, session.start_time)
                     project.last_seen = max(project.last_seen, session.end_time)
                     project.session_count += 1

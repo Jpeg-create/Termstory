@@ -67,3 +67,34 @@ def test_detect_projects():
     # Session 3 should remain unaffiliated
     assert s3.project_id is None
     assert cmd5.project_id is None
+
+def test_find_project_root(tmp_path, monkeypatch):
+    monkeypatch.setattr("os.path.expanduser", lambda path: str(tmp_path) if path == "~" else path)
+    
+    # 1. Create a directory structure with git root
+    proj_dir = tmp_path / "Projects" / "my-awesome-repo"
+    sub_dir = proj_dir / "subfolder" / "deep-nested"
+    sub_dir.mkdir(parents=True)
+    
+    # Create a git marker
+    git_dir = proj_dir / ".git"
+    git_dir.mkdir()
+    
+    # Verify resolving sub_dir root finds the repo root
+    from termstory.project import find_project_root
+    assert find_project_root(str(sub_dir)) == str(proj_dir)
+    
+    # 2. Test common project marker file (e.g. package.json)
+    package_dir = tmp_path / "Projects" / "node-project"
+    nested_node = package_dir / "src" / "components"
+    nested_node.mkdir(parents=True)
+    
+    package_json = package_dir / "package.json"
+    package_json.touch()
+    
+    assert find_project_root(str(nested_node)) == str(package_dir)
+    
+    # 3. Test fallback with no markers under known Projects path
+    fallback_dir = tmp_path / "Projects" / "fallback-project" / "sub" / "dir"
+    fallback_dir.mkdir(parents=True)
+    assert find_project_root(str(fallback_dir)) == str(tmp_path / "Projects" / "fallback-project")
