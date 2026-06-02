@@ -606,13 +606,94 @@ def highlight_query(text_str: str, query: str) -> Text:
         start = pos + len_q
     return text
 
+# --- Search helpers: noise filtering and memory extraction ---
+
+_NOISE_COMMANDS_EXACT = frozenset({
+    'cd', 'ls', 'pwd', 'clear', 'history', 'exit', 'q',
+    'docker ps', 'docker images', 'docker logs', 'docker stop',
+    'docker restart', 'docker system prune -a',
+    'git status', 'git branch', 'git log', 'git diff', 'git stash',
+    'top', 'htop', 'whoami',
+})
+
+def _is_noise_command(cmd: str) -> bool:
+    """Check if a command is low-value noise (navigation, status checks, debugging).
+    Multi-command chains (&&, ;) are never noise."""
+    stripped = cmd.strip()
+    if not stripped:
+        return True
+    lower = stripped.lower()
+    if lower in _NOISE_COMMANDS_EXACT:
+        return True
+    # Multi-command chains are intentional work
+    if '&&' in stripped or '; ' in stripped:
+        return False
+    # Navigation
+    if lower.startswith(('cd ', 'cd\t', 'ls ', 'ls\t')):
+        return True
+    # Shell comments and pasted code fences
+    if stripped.startswith('#') or stripped.startswith('```'):
+        return True
+    # Debugging/inspection commands (not creative work)
+    if lower.startswith(('docker logs ', 'docker exec ', 'docker stop ',
+                         'docker restart ')):
+        return True
+    if lower.startswith(('tail ', 'head ', 'cat ', 'grep ', 'wc ')):
+        return True
+    return False
+
+def _get_session_memory(result: Dict) -> Optional[Tuple[int, str, bool]]:
+    """Extract the single best 'memory' from a search result session.
+    Priority: matching commits > non-noise matching commands > non-noise commands.
+    Returns (timestamp, description, is_commit) or None if nothing meaningful."""
+    ts = result["start_time"]
+
+    # Priority 1: Matching commits — these ARE the memory
+    if result.get("matching_commits"):
+        c = result["matching_commits"][0]
+        return (ts, c["cleaned_message"] or c["message"], True)
+
+    # Priority 2: Non-noise matching commands (pick most descriptive)
+    if result.get("matching_commands"):
+        candidates = [cmd for cmd in result["matching_commands"] if not _is_noise_command(cmd)]
+        if candidates:
+            return (ts, max(candidates, key=len), False)
+
+    # Priority 3: Non-noise any commands
+    if result.get("all_commands"):
+        candidates = [cmd for cmd in result["all_commands"] if not _is_noise_command(cmd)]
+        if candidates:
+            return (ts, max(candidates, key=len), False)
+
+    # Nothing meaningful in this session
+    return None
+
+def _collapse_by_day(entries: List[Tuple[int, str, bool]]) -> List[Tuple[int, str]]:
+    """Collapse a list of (timestamp, description, is_commit) entries to one per day.
+    Prefers commit-sourced memories over command-sourced ones, then longest."""
+    day_groups = defaultdict(list)
+    for ts, desc, is_commit in entries:
+        day_key = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+        day_groups[day_key].append((ts, desc, is_commit))
+
+    collapsed = []
+    for day_key in sorted(day_groups.keys(), reverse=True):
+        group = day_groups[day_key]
+        # Prefer commits over commands, then longest description
+        best = max(group, key=lambda x: (x[2], len(x[1])))
+        collapsed.append((best[0], best[1]))
+    return collapsed
+
+# --- Main search formatter ---
+
 def format_search_results(query: str, results: List[Dict], detailed: bool = False) -> str:
-    """Format matching search sessions and highlight key elements"""
+    """Format search results as a memory-first timeline, not history rows."""
     if not results:
-        return f"🔍 Query: [bold cyan]{query}[/] | No matches found"
-        
+        query_title = query.capitalize()
+        return f"[bold cyan]{query_title}[/]\n\n[dim]No matches found[/]"
+
     total_matched_time = sum(r["duration_seconds"] for r in results)
-    
+
     # Calculate date range
     timestamps = [r["start_time"] for r in results]
     min_dt = datetime.fromtimestamp(min(timestamps))
@@ -621,55 +702,74 @@ def format_search_results(query: str, results: List[Dict], detailed: bool = Fals
         date_range_str = f"{min_dt.strftime('%b %d')} → {max_dt.strftime('%b %d')}"
     else:
         date_range_str = f"{min_dt.strftime('%b %d, %Y')} → {max_dt.strftime('%b %d, %Y')}"
-        
+
     header_str = f"🔍 Query: [bold cyan]{query}[/] | [bold green]{format_duration(total_matched_time)}[/] total | [bold]{len(results)}[/] sessions | [dim]{date_range_str}[/]"
-    
+
     if not detailed:
-        table = Table(box=None, show_header=False, padding=(0, 1))
-        table.add_column("date", style="dim", width=6, no_wrap=True)
-        table.add_column("time", style="dim", width=5, no_wrap=True)
-        table.add_column("duration", style="green", width=7, no_wrap=True)
-        table.add_column("project", style="cyan bold", width=16, no_wrap=True)
-        table.add_column("match")
-        
+        # Step 1: Extract ONE memory per session, grouped by project
+        project_memories = defaultdict(list)
         for r in results:
-            dt = datetime.fromtimestamp(r["start_time"])
-            date_str = dt.strftime("%b %d")
-            time_str = dt.strftime("%H:%M")
-            dur_str = f"({format_duration(r['duration_seconds'])})"
-            
-            proj_name = r["project_name"] or "General"
-            if len(proj_name) > 16:
-                proj_name = proj_name[:15] + "…"
-            
-            match_text = ""
-            if r["matching_commits"]:
-                c = r["matching_commits"][0]
-                match_text = c["cleaned_message"] or c["message"]
-            elif r["matching_commands"]:
-                match_text = r["matching_commands"][0]
-            elif r["all_commands"]:
-                match_text = r["all_commands"][0]
-                
-            t_obj = highlight_query(match_text, query)
-            t_obj.no_wrap = True
-            t_obj.overflow = "ellipsis"
-            
-            table.add_row(
-                date_str,
-                time_str,
-                dur_str,
-                proj_name,
-                t_obj
-            )
-            
+            proj_name = r["project_name"]
+            if not proj_name or proj_name == "General / No Project":
+                proj_name = "Other"
+
+            memory = _get_session_memory(r)
+            if memory:
+                project_memories[proj_name].append(memory)
+
+        # Step 2: Collapse to one entry per day per project
+        for proj in list(project_memories.keys()):
+            project_memories[proj] = _collapse_by_day(project_memories[proj])
+
+        # Step 3: Build header
+        query_title = query.capitalize()
+        header_lines = [
+            f"[bold cyan]{query_title}[/]\n",
+            f"[dim]{format_duration(total_matched_time)} across {len(results)} sessions[/]",
+            f"[dim]{date_range_str}[/]\n"
+        ]
+
+        # Sort: Other goes last
+        sorted_projects = sorted(
+            project_memories.keys(),
+            key=lambda p: (1 if p == "Other" else 0, p.lower())
+        )
+
+        # Step 4: Render project groups
+        body_elements = []
+        for proj in sorted_projects:
+            entries = project_memories[proj]
+            if not entries:
+                continue
+
+            proj_group = [
+                Text.from_markup(f"[bold]{proj}[/]"),
+                Text.from_markup("[dim]" + "─" * 20 + "[/]"),
+                Text("")
+            ]
+
+            table = Table(box=None, show_header=False, padding=0)
+            table.add_column("date", style="dim", width=8, no_wrap=True)
+            table.add_column("desc", no_wrap=False)
+
+            for ts, desc in entries:
+                day_str = datetime.fromtimestamp(ts).strftime("%b %d")
+                t_obj = highlight_query(desc, query)
+                t_obj.no_wrap = True
+                t_obj.overflow = "ellipsis"
+                table.add_row(day_str, t_obj)
+
+            proj_group.append(table)
+            proj_group.append(Text(""))
+            body_elements.append(Group(*proj_group))
+
         outer_group = Group(
-            Text.from_markup(header_str + "\n"),
-            table
+            Text.from_markup("\n".join(header_lines)),
+            *body_elements
         )
         return render_to_string(outer_group)
-        
-    # Detailed mode (Box-free progressive disclosure view)
+
+    # Detailed mode — full inspection view with timestamps, durations, commands
     group_items = [Text.from_markup(header_str + "\n")]
     for idx, r in enumerate(results, 1):
         s_id = r["session_id"]
@@ -677,35 +777,34 @@ def format_search_results(query: str, results: List[Dict], detailed: bool = Fals
         end_str = format_time(r["end_time"])
         date_str = datetime.fromtimestamp(r["start_time"]).strftime("%B %d, %Y")
         dur_str = format_duration(r["duration_seconds"])
-        proj_name = r["project_name"] or "General"
-        
+
+        proj_name = r["project_name"]
+        if not proj_name or proj_name == "General / No Project":
+            proj_name = "Other"
+
         session_header = f"MATCH {idx}: Session {s_id} on [bold]{date_str}[/] ({start_str} - {end_str}) [[bold green]{dur_str}[/]]"
         proj_line = f"📁 Project: [bold cyan]{proj_name}[/]"
-        
+
         session_group = [
             Text.from_markup(session_header),
             Text.from_markup(proj_line)
         ]
-        
+
         if r["matching_commands"]:
             session_group.append(Text("\nMatching Commands:"))
             for cmd in r["matching_commands"]:
                 session_group.append(Group(Text("  • "), highlight_query(cmd, query)))
-                
+
         if r["matching_commits"]:
             session_group.append(Text("\nMatching Commits:"))
             for c in r["matching_commits"]:
                 short_hash = c["hash"][:7]
                 msg = c["cleaned_message"] or c["message"]
                 session_group.append(Group(Text(f"  • [cyan]{short_hash}[/] "), highlight_query(msg, query)))
-                
+
         session_group.append(Text("\n" + "─" * 60 + "\n"))
         group_items.append(Group(*session_group))
-        
-    if group_items and isinstance(group_items[-1], Group) and group_items[-1].renderables and isinstance(group_items[-1].renderables[-1], Text) and group_items[-1].renderables[-1].plain.startswith("\n─"):
-        # Remove trailing separator
-        pass
-        
+
     return render_to_string(Group(*group_items))
 
 def format_insights_output(insights: Dict) -> str:

@@ -94,7 +94,8 @@ def test_formatter_detailed_sessions():
     assert "git diff" in output
 
 def test_formatter_search_results():
-    now = int(time.time())
+    # Tuesday, June 2nd, 2026
+    now = 1772481600 # 2026-06-02 12:00:00 UTC
     results = [{
         "session_id": 1,
         "start_time": now,
@@ -109,10 +110,27 @@ def test_formatter_search_results():
         "matching_commits": [{"hash": "abcdefabcdef", "timestamp": now, "message": "feat: init", "cleaned_message": "Init"}]
     }]
     
-    output = format_search_results("git", results)
-    assert "Query: git" in output
+    # 1. Test default mode
+    output = format_search_results("git", results, detailed=False)
+    
+    min_dt = datetime.fromtimestamp(now)
+    expected_date = min_dt.strftime('%b %d')
+    expected_range = f"{expected_date} → {expected_date}"
+    
+    assert "Git" in output
+    assert "10m across 1 sessions" in output
+    assert expected_range in output
     assert "Project Delta" in output
-    assert "Init" in output
+    assert "────────────────────" in output
+    # Check alignment and text
+    assert f"{expected_date}  Init" in output
+
+    # 2. Test detailed mode
+    detailed_output = format_search_results("git", results, detailed=True)
+    assert "MATCH 1: Session 1" in detailed_output
+    assert "Project: Project Delta" in detailed_output
+    assert "Init" in detailed_output
+    assert "git diff" in detailed_output
 
 def test_formatter_insights_output():
     insights_data = {
