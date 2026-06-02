@@ -77,8 +77,13 @@ class Database:
             cursor = conn.cursor()
             
             # --- 1. Save Projects ---
-            # Capture the temporary python project IDs first
-            name_to_old_id = {p.name: p.id for p in projects if p.id is not None}
+            # Capture the temporary python project IDs first (grouping by name)
+            name_to_old_ids = {}
+            for p in projects:
+                if p.id is not None:
+                    if p.name not in name_to_old_ids:
+                        name_to_old_ids[p.name] = []
+                    name_to_old_ids[p.name].append(p.id)
             
             cursor.execute("SELECT id, name, path, first_seen, last_seen FROM projects")
             db_projects = {row[1]: {"id": row[0], "path": row[2], "first_seen": row[3], "last_seen": row[4]} for row in cursor.fetchall()}
@@ -124,9 +129,11 @@ class Database:
                 project.id = refreshed_projects[project.name]
                 
             # Build the ID mapping: old_python_id -> db_id
-            for name, old_id in name_to_old_id.items():
+            for name, old_ids in name_to_old_ids.items():
                 if name in refreshed_projects:
-                    project_id_map[old_id] = refreshed_projects[name]
+                    db_id = refreshed_projects[name]
+                    for old_id in old_ids:
+                        project_id_map[old_id] = db_id
                 
             # Re-map project_ids in sessions and commands
             for session in sessions:

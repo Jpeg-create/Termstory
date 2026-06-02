@@ -49,8 +49,8 @@ def parse_zsh_history(filepath: str) -> List[Command]:
                 # Continuation of multiline command if the previous line ended with a backslash
                 if current_timestamp is not None:
                     if current_command_parts and current_command_parts[-1].rstrip().endswith('\\'):
-                        # Strip trailing backslash from previous part before appending next line
-                        current_command_parts[-1] = current_command_parts[-1].rstrip()[:-1]
+                        # Strip trailing backslash and ensure a space separates the parts
+                        current_command_parts[-1] = current_command_parts[-1].rstrip()[:-1] + " "
                         current_command_parts.append(line)
                     
         # Save last command

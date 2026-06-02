@@ -92,7 +92,7 @@ def disambiguate_project_names(projects: List[Project]) -> Dict[int, str]:
 
 def find_project_root(path: str) -> str:
     """Find the root project directory for a given path by looking for repository/project markers, 
-    stopping at home or root directories."""
+    stopping at home or root directories. Prioritizes VCS roots (.git, .hg, .svn) first."""
     # Expand and make absolute
     abs_path = os.path.abspath(os.path.expanduser(path))
     home = os.path.abspath(os.path.expanduser("~"))
@@ -101,21 +101,31 @@ def find_project_root(path: str) -> str:
     if abs_path == home or abs_path == "/":
         return abs_path
         
+    # --- Pass 1: Search for VCS roots (.git, .hg, .svn) ---
     current = abs_path
-    
-    # Marker files/directories indicating a project root
+    vcs_markers = {".git", ".hg", ".svn"}
+    while current and current != home and current != "/":
+        try:
+            files = os.listdir(current)
+            if any(marker in files for marker in vcs_markers):
+                return current
+        except Exception:
+            pass
+            
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+        
+    # --- Pass 2: Search for other project markers (pom.xml, package.json, etc.) ---
+    current = abs_path
     project_markers = {
-        # Repositories
-        ".git", ".hg", ".svn",
-        # Project files
         "package.json", "pom.xml", "build.gradle", "Cargo.toml", 
         "requirements.txt", "setup.py", "Makefile", "go.mod", 
         "CMakeLists.txt", "pyproject.toml"
     }
-    
     while current and current != home and current != "/":
         try:
-            # Check if any marker exists in the current directory
             files = os.listdir(current)
             if any(marker in files for marker in project_markers):
                 return current
@@ -144,53 +154,84 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
     # Sort sessions by start_time to keep timelines linear
     sorted_sessions = sorted(sessions, key=lambda s: s.start_time)
     
+    # Persist cwd state across sessions to mirror terminal tab preservation
+    cwd = os.path.expanduser("~")
+    home = os.path.abspath(os.path.expanduser("~"))
+    
     for session in sorted_sessions:
-        # Find cd commands
-        cd_commands = []
+        has_cd = False
+        
         for cmd in session.commands:
             cmd_stripped = cmd.command.strip()
             # Must start with cd followed by space/tab/EOF
             if cmd_stripped == "cd" or cmd_stripped.startswith("cd ") or cmd_stripped.startswith("cd\t"):
-                cd_commands.append(cmd)
-                
-        if cd_commands:
-            # Look at the last cd command in the session
-            last_cd = cd_commands[-1]
-            path = extract_cd_path(last_cd.command)
-            if path:
-                # Resolve the project root path
-                project_root = find_project_root(path)
-                
-                if project_root not in projects_dict:
-                    # Convert absolute project root back to a user-friendly path (using ~ if possible)
-                    home = os.path.expanduser("~")
-                    display_path = project_root
-                    if project_root.startswith(home):
-                        display_path = project_root.replace(home, "~", 1)
+                path = extract_cd_path(cmd.command)
+                if path:
+                    has_cd = True
+                    # Resolve path
+                    resolved = None
+                    if path.startswith("/") or path.startswith("~"):
+                        resolved = os.path.abspath(os.path.expanduser(path))
+                    else:
+                        # Try relative to current simulated cwd
+                        test_path = os.path.abspath(os.path.join(cwd, path))
+                        if os.path.exists(test_path):
+                            resolved = test_path
+                        else:
+                            # Try relative to any ancestor of the current cwd (handles missing cds)
+                            ancestor = cwd
+                            while ancestor and ancestor != home and ancestor != "/":
+                                ancestor = os.path.dirname(ancestor)
+                                test_path_ancestor = os.path.abspath(os.path.join(ancestor, path))
+                                if os.path.exists(test_path_ancestor):
+                                    resolved = test_path_ancestor
+                                    break
+                                    
+                            if not resolved:
+                                # Try relative to home directory
+                                test_path_home = os.path.abspath(os.path.join(home, path))
+                                if os.path.exists(test_path_home):
+                                    resolved = test_path_home
+                                else:
+                                    # Fallback: just join it relative to current cwd
+                                    resolved = test_path
+                                
+                    if resolved:
+                        cwd = resolved
                         
-                    name = humanize_project_name(project_root)
-                    project = Project(
-                        id=project_id_counter,
-                        name=name,
-                        path=display_path,
-                        first_seen=session.start_time,
-                        last_seen=session.end_time,
-                        session_count=1,
-                        total_time=session.duration_seconds
-                    )
-                    projects_dict[project_root] = project
-                    project_id_counter += 1
-                else:
-                    project = projects_dict[project_root]
-                    project.first_seen = min(project.first_seen, session.start_time)
-                    project.last_seen = max(project.last_seen, session.end_time)
-                    project.session_count += 1
-                    project.total_time += session.duration_seconds
+        if has_cd:
+            # The project path is the resolved cwd at the end of the session
+            project_root = find_project_root(cwd)
+            
+            if project_root not in projects_dict:
+                # Convert absolute project root back to a user-friendly path (using ~ if possible)
+                display_path = project_root
+                if project_root.startswith(home):
+                    display_path = project_root.replace(home, "~", 1)
                     
-                # Link session and commands to project
-                session.project_id = project.id
-                for cmd in session.commands:
-                    cmd.project_id = project.id
+                name = humanize_project_name(project_root)
+                project = Project(
+                    id=project_id_counter,
+                    name=name,
+                    path=display_path,
+                    first_seen=session.start_time,
+                    last_seen=session.end_time,
+                    session_count=1,
+                    total_time=session.duration_seconds
+                )
+                projects_dict[project_root] = project
+                project_id_counter += 1
+            else:
+                project = projects_dict[project_root]
+                project.first_seen = min(project.first_seen, session.start_time)
+                project.last_seen = max(project.last_seen, session.end_time)
+                project.session_count += 1
+                project.total_time += session.duration_seconds
+                
+            # Link session and commands to project
+            session.project_id = project.id
+            for cmd in session.commands:
+                cmd.project_id = project.id
         else:
             session.project_id = None
             for cmd in session.commands:
