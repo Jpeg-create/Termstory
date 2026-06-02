@@ -1,0 +1,8 @@
+: 1748851200:0;git status
+: 1748851205:0;docker compose up -d
+: 1748851210:0;cd ~/Project/incubator-hugegraph
+: 1748851215:0;git commit -m "Fix docker issue"
+: 1748851220:0;echo \
+  "Hello World"
+: 1748854800:0;npm install
+: 1748854810:0;npm run dev
