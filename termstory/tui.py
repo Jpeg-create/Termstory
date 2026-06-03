@@ -733,7 +733,7 @@ class DetailsCanvas(VerticalScroll):
             btn_configure.classes = "configure-ai-btn"
             self.mount(btn_configure)
         
-        if ai_enabled and provider != "disabled" and timeframe_id and timeframe_type in ("month", "date"):
+        if ai_enabled and provider != "disabled" and timeframe_id and timeframe_type in ("month", "date", "overall"):
             # A. Timeframe Summary Section
             exec_widgets = [Static("[bold gold]━━━ AI Timeframe Summary ━━━[/bold gold]\n")]
             
@@ -1471,7 +1471,9 @@ class TermStoryWorkspace(App):
             self.call_from_thread(self.set_timer, 15.0, clear_recent)
             
             self.call_from_thread(self.update_session_ui, session.id, summary)
+            self.call_from_thread(self.notify, "Story generated successfully!")
         else:
+            self.call_from_thread(self.notify, "Failed to generate story. Check AI config or logs.", severity="error")
             self.call_from_thread(self.refresh_details_canvas)
 
     @work(exclusive=True)
@@ -1496,6 +1498,15 @@ class TermStoryWorkspace(App):
         if provider in ("groq", "openai") and not api_key:
             return
         self.generating_reviews.add(timeframe_id)
+        # Delete old cached summary from database so we start fresh on regeneration
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM macro_summaries WHERE timeframe_id = ?", (timeframe_id,))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
         self.call_from_thread(self.refresh_details_canvas)
         
         if timeframe_type == "date":
@@ -1524,6 +1535,9 @@ class TermStoryWorkspace(App):
         self.generating_reviews.discard(timeframe_id)
         if summary:
             self.db.save_macro_summary(timeframe_id, timeframe_type, summary)
+            self.call_from_thread(self.notify, "Summary generated successfully!")
+        else:
+            self.call_from_thread(self.notify, "Failed to generate summary. Check AI config or logs.", severity="error")
             
         self.call_from_thread(self.refresh_details_canvas)
 
@@ -1602,6 +1616,7 @@ class TermStoryWorkspace(App):
                 time.sleep(2.0)
                 
         self.bulk_running_timeframes.pop(timeframe_id, None)
+        self.call_from_thread(self.notify, f"Bulk auto-summarization of {total} sessions completed!")
         self.call_from_thread(self.refresh_details_canvas)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1645,6 +1660,11 @@ class TermStoryWorkspace(App):
                     missing_sessions = [
                         s for s in self.sessions 
                         if s.date_str == timeframe_id and not s.ai_summary
+                    ]
+                elif timeframe_type == "overall":
+                    missing_sessions = [
+                        s for s in self.sessions 
+                        if not s.ai_summary
                     ]
                 if missing_sessions:
                     self.bulk_generate_sessions_stories(timeframe_id, timeframe_type, missing_sessions)

@@ -417,6 +417,66 @@ async def test_tui_generate_executive_review(monkeypatch):
             cached = db.get_macro_summary(date_str)
             assert cached == "Generated Executive Review text."
 
+@pytest.mark.asyncio
+async def test_tui_overall_timeframe_summary(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+        
+        now_ts = int(time.time())
+        p = Project(id=1, name="Proj A", path="~/proj-a", first_seen=now_ts, last_seen=now_ts, session_count=1, total_time=0)
+        cmd = Command(timestamp=now_ts, command="git diff", exit_code=0, session_id=1, project_id=1)
+        s = Session(id=1, start_time=now_ts, end_time=now_ts, duration_seconds=0, project_id=1, commands=[cmd], ai_summary="Story")
+        db.save_data([p], [s], [cmd])
+        
+        app = TermStoryWorkspace(
+            db, 
+            days_limit=30, 
+            config_override={
+                "has_seen_onboarding": True, 
+                "ai_enabled": True, 
+                "active_provider": "groq",
+                "providers": {
+                    "groq": {
+                        "api_key": "gsk_test",
+                        "api_base_url": "https://api.groq.com/openai/v1",
+                        "model_name": "llama3"
+                    }
+                }
+            }
+        )
+        
+        called = []
+        def mock_generate_timeframe_summary(stats_summary, api_key, api_base_url, model_name, provider):
+            called.append(stats_summary)
+            return "Generated Overall Summary."
+            
+        monkeypatch.setattr("termstory.tui.generate_timeframe_summary", mock_generate_timeframe_summary)
+        
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            
+            # Select the timeline category node to display the overall summary
+            tree = app.query_one("#history-navigator")
+            timeline_node = tree.root.children[0]
+            tree.select_node(timeline_node)
+            await pilot.pause()
+            
+            # Press the generate executive review button for overall timeframe
+            app.query_one("#btn-exec-overall-overall").press()
+            await pilot.pause()
+            
+            import asyncio
+            for _ in range(50):
+                if len(called) == 1:
+                    break
+                await asyncio.sleep(0.05)
+                
+            assert len(called) == 1
+            cached = db.get_macro_summary("overall")
+            assert cached == "Generated Overall Summary."
+
 
 @pytest.mark.asyncio
 async def test_tui_bulk_auto_summarize(monkeypatch):
