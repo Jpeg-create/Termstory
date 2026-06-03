@@ -737,18 +737,25 @@ class DetailsCanvas(VerticalScroll):
             # A. Timeframe Summary Section
             exec_widgets = [Static("[bold gold]━━━ AI Timeframe Summary ━━━[/bold gold]\n")]
             
+            stats_summary = compile_timeframe_stats_for_ai(sessions, projects)
+            self.app._temp_stats_summary = stats_summary
+            
             cached_exec = self.app.db.get_macro_summary(timeframe_id)
             if cached_exec:
                 exec_widgets.append(Static(f"{cached_exec}\n"))
+                try:
+                    btn_regen = Button("⟳ Regenerate Timeframe Summary", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
+                    btn_regen.classes = "exec-btn"
+                    exec_widgets.append(btn_regen)
+                except Exception:
+                    pass
             elif timeframe_id in getattr(self.app, "generating_reviews", set()):
                 exec_widgets.append(Static("⏳ [italic yellow]Generating Timeframe Summary... please wait[/italic yellow]\n"))
             else:
-                stats_summary = compile_timeframe_stats_for_ai(sessions, projects)
                 exec_widgets.append(Static("[dim]Ask AI to write a high-level summary of your work for this period:[/dim]"))
                 try:
                     btn = Button("✨ Generate Timeframe Summary", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
                     btn.classes = "exec-btn"
-                    self.app._temp_stats_summary = stats_summary
                     exec_widgets.append(btn)
                 except Exception:
                     pass
