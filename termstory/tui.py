@@ -877,6 +877,7 @@ class DetailsCanvas(VerticalScroll):
         narrative_widgets = []
         
         if ai_enabled and provider != "disabled":
+            narrative_widgets.append(Static("[bold gold]━━━ AI Timeframe Summary ━━━[/bold gold]\n"))
             cached_story = self.app.db.get_macro_summary(date_str)
             if cached_story:
                 narrative_widgets.append(Static(Text(cached_story)))
