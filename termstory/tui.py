@@ -740,25 +740,26 @@ class DetailsCanvas(VerticalScroll):
             stats_summary = compile_timeframe_stats_for_ai(sessions, projects)
             self.app._temp_stats_summary = stats_summary
             
-            cached_exec = self.app.db.get_macro_summary(timeframe_id)
-            if cached_exec:
-                exec_widgets.append(Static(f"{cached_exec}\n"))
-                try:
-                    btn_regen = Button("⟳ Regenerate Timeframe Summary", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
-                    btn_regen.classes = "exec-btn"
-                    exec_widgets.append(btn_regen)
-                except Exception:
-                    pass
-            elif timeframe_id in getattr(self.app, "generating_reviews", set()):
+            if timeframe_id in getattr(self.app, "generating_reviews", set()):
                 exec_widgets.append(Static("⏳ [italic yellow]Generating Timeframe Summary... please wait[/italic yellow]\n"))
             else:
-                exec_widgets.append(Static("[dim]Ask AI to write a high-level summary of your work for this period:[/dim]"))
-                try:
-                    btn = Button("✨ Generate Timeframe Summary", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
-                    btn.classes = "exec-btn"
-                    exec_widgets.append(btn)
-                except Exception:
-                    pass
+                cached_exec = self.app.db.get_macro_summary(timeframe_id)
+                if cached_exec:
+                    exec_widgets.append(Static(f"{cached_exec}\n"))
+                    try:
+                        btn_regen = Button("⟳ Regenerate Timeframe Summary", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
+                        btn_regen.classes = "exec-btn"
+                        exec_widgets.append(btn_regen)
+                    except Exception:
+                        pass
+                else:
+                    exec_widgets.append(Static("[dim]Ask AI to write a high-level summary of your work for this period:[/dim]"))
+                    try:
+                        btn = Button("✨ Generate Timeframe Summary", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
+                        btn.classes = "exec-btn"
+                        exec_widgets.append(btn)
+                    except Exception:
+                        pass
                 
             self.mount(Vertical(*exec_widgets, classes="exec-container"))
             
@@ -889,22 +890,23 @@ class DetailsCanvas(VerticalScroll):
         
         if ai_enabled and provider != "disabled":
             narrative_widgets.append(Static("[bold gold]━━━ AI Timeframe Summary ━━━[/bold gold]\n"))
-            cached_story = self.app.db.get_macro_summary(date_str)
-            if cached_story:
-                narrative_widgets.append(Static(Text(cached_story)))
-                
-                # Add a Regenerate button for the chronicle
-                btn_regen = Button("⟳ Regenerate Chronicle", id=f"btn-exec-{date_str}-date")
-                btn_regen.classes = "exec-btn"
-                narrative_widgets.append(btn_regen)
-            elif date_str in getattr(self.app, "generating_reviews", set()):
+            if date_str in getattr(self.app, "generating_reviews", set()):
                 narrative_widgets.append(Static("⏳ [italic yellow]Generating Daily Chronicle... please wait[/italic yellow]\n"))
             else:
-                # Add a button to generate the chronicle
-                narrative_widgets.append(Static("[dim]Ask AI to compile the chronological Story of You for this day:[/dim]"))
-                btn_gen = Button("✨ Generate Daily Chronicle", id=f"btn-exec-{date_str}-date")
-                btn_gen.classes = "exec-btn"
-                narrative_widgets.append(btn_gen)
+                cached_story = self.app.db.get_macro_summary(date_str)
+                if cached_story:
+                    narrative_widgets.append(Static(Text(cached_story)))
+                    
+                    # Add a Regenerate button for the chronicle
+                    btn_regen = Button("⟳ Regenerate Chronicle", id=f"btn-exec-{date_str}-date")
+                    btn_regen.classes = "exec-btn"
+                    narrative_widgets.append(btn_regen)
+                else:
+                    # Add a button to generate the chronicle
+                    narrative_widgets.append(Static("[dim]Ask AI to compile the chronological Story of You for this day:[/dim]"))
+                    btn_gen = Button("✨ Generate Daily Chronicle", id=f"btn-exec-{date_str}-date")
+                    btn_gen.classes = "exec-btn"
+                    narrative_widgets.append(btn_gen)
                 
             # Render bulk auto-summarization option if sessions are missing AI summaries
             missing_sessions = [s for s in sessions if not s.ai_summary]
