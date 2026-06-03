@@ -631,3 +631,121 @@ def test_tui_copy_to_clipboard(monkeypatch):
     assert "test-copy-text" in parent_called
 
 
+@pytest.mark.asyncio
+async def test_reset_action():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "test_termstory.db")
+        db = Database(db_path)
+        db.init_db()
+        
+        app = TermStoryWorkspace(
+            db, 
+            days_limit=30, 
+            config_override={"has_seen_onboarding": True, "ai_enabled": False}
+        )
+        
+        async with app.run_test() as pilot:
+            assert app.was_reset is False
+            await pilot.press("ctrl+shift+h")
+            assert app.was_reset is True
+
+
+@pytest.mark.asyncio
+async def test_tui_month_no_activity_feed():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+        
+        now_ts = int(time.time())
+        p = Project(id=1, name="Proj A", path="~/proj-a", first_seen=now_ts, last_seen=now_ts, session_count=1, total_time=0)
+        cmd = Command(timestamp=now_ts, command="git diff", exit_code=0, session_id=1, project_id=1)
+        s = Session(id=1, start_time=now_ts, end_time=now_ts, duration_seconds=0, project_id=1, commands=[cmd], ai_summary="Story")
+        db.save_data([p], [s], [cmd])
+        
+        app = TermStoryWorkspace(
+            db, 
+            days_limit=30, 
+            config_override={"has_seen_onboarding": True, "ai_enabled": False}
+        )
+        
+        async with app.run_test() as pilot:
+            canvas = app.query_one("#details-canvas")
+            canvas.render_wrapped_view("June 2026", "2026-06", [s], [p])
+            await pilot.pause()
+            
+            from textual.css.query import NoMatches
+            with pytest.raises(NoMatches):
+                canvas.query_one(".feed-container")
+                
+            canvas.render_time_summary("📊 Overall Dashboard Summary", [s], [p], timeframe_id="overall", timeframe_type="overall")
+            await pilot.pause()
+            
+            feed = canvas.query_one(".feed-container")
+            assert feed is not None
+
+
+@pytest.mark.asyncio
+async def test_wrapped_view_generation_and_layout(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+        
+        now_ts = int(time.time())
+        p = Project(id=1, name="Proj A", path="~/proj-a", first_seen=now_ts, last_seen=now_ts, session_count=1, total_time=0)
+        cmd = Command(timestamp=now_ts, command="git diff", exit_code=0, session_id=1, project_id=1)
+        s = Session(id=1, start_time=now_ts, end_time=now_ts, duration_seconds=120, project_id=1, commands=[cmd], ai_summary="Story")
+        db.save_data([p], [s], [cmd])
+        
+        app = TermStoryWorkspace(
+            db, 
+            days_limit=30, 
+            config_override={
+                "has_seen_onboarding": True, 
+                "ai_enabled": True, 
+                "active_provider": "groq",
+                "providers": {
+                    "groq": {
+                        "api_key": "gsk_test",
+                        "api_base_url": "https://api.groq.com/openai/v1",
+                        "model_name": "llama3"
+                    }
+                }
+            }
+        )
+        
+        called_args = []
+        def mock_generate_wrapped_summary(**kwargs):
+            called_args.append(kwargs)
+            return "🧠 IMPOSTER SYNDROME INDEX: 94%\n   Mock audit text.\n\n[VERDICT] Mock verdict text."
+            
+        monkeypatch.setattr("termstory.tui.generate_wrapped_summary", mock_generate_wrapped_summary)
+        
+        async with app.run_test(size=(120, 50)) as pilot:
+            canvas = app.query_one("#details-canvas")
+            canvas.render_wrapped_view("June 2026", "2026-06", [s], [p])
+            await pilot.pause()
+            
+            app.query_one("#btn-exec-2026-06-month").press()
+            await pilot.pause()
+            
+            import asyncio
+            for _ in range(50):
+                if len(called_args) == 1:
+                    break
+                await asyncio.sleep(0.05)
+                
+            assert len(called_args) == 1
+            assert "focus_hours" in called_args[0]
+            assert "additions" in called_args[0]
+            assert "deletions" in called_args[0]
+            assert "merged_prs" in called_args[0]
+            
+            cached = db.get_macro_summary("2026-06")
+            assert "Mock verdict text." in cached
+
+
+
+
+

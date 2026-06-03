@@ -402,3 +402,85 @@ def generate_daily_chronicle(
     prompt = generate_daily_chronicle_prompt(github_username, session_date, sessions, projects)
     return _send_llm_request(prompt, api_key, api_base_url, model_name, provider)
 
+
+def generate_wrapped_summary(
+    github_username: str,
+    focus_hours: float,
+    total_sessions: int,
+    additions: int,
+    deletions: int,
+    merged_prs: int,
+    branch_names_list: str,
+    cleaned_commits_block: str,
+    project_distributions_percentages: str,
+    top_editor_buffers_with_durations: str,
+    amends_count: int,
+    midnight_percentage: float,
+    success_rate: float,
+    failed_builds: int,
+    passed_builds: int,
+    tool_keywords_list: str,
+    redacted_secrets_count: int,
+    api_key: str,
+    api_base_url: str,
+    model_name: str,
+    provider: str
+) -> Optional[str]:
+    """Query LLM to generate the wittiest and sharpest Behavioral Audit & Verdict for TermStory Wrapped."""
+    if provider == "disabled":
+        return None
+        
+    prompt = (
+        "You are the elite biographer for TermStory Wrapped. Your task is to analyze a developer's 30-day aggregated terminal metrics, local/pushed git commits, editor buffers, tool loops, and shell habits, and write the final \"BEHAVIORAL AUDIT\" text block.\n\n"
+        "CRITICAL TEXT GENERATION RULES:\n"
+        "1. VOICE: Write in a sharp, witty, highly perceptive second-person (\"You\") voice. Blend authentic software engineering terminology with dry developer humor.\n"
+        "2. NO MARKDOWN: Absolutely do not include markdown headers, bold syntax (**), or outside quotes. Return only the raw text intended to sit inside the console panel box lines.\n"
+        "3. CONSTRAINTS: Keep each section description under 4 lines of console length (approx 70 characters per line) to avoid text-wrapping breaking the terminal box alignment.\n\n"
+        "INFERRED MULTI-DIMENSIONAL PATTERNS TO AUDIT:\n"
+        "- IMPOSTER SYNDROME INDEX: Deduce this from the frequency of `git commit --amend`. Frame it as you gaslighting your reviewers into thinking you write perfect code on the first try.\n"
+        "- MIDNIGHT OIL FACTOR: Evaluate late-night timestamps and key ratios. Call out sleep hygiene, dark mode addiction, and caffeine habits.\n"
+        "- THE ARCHITECTURAL PURGE: Highlight if they achieved a net-negative line change (deleting more than adding), framing it as a heroic war against codebase bloat.\n"
+        "- THE TRENCH WAR DIAGNOSTIC: Look at the exit code success-to-failure ratio. Call out their stubbornness or debugging grit when fighting repetitive compiler/test errors.\n"
+        "- SIDE-QUEST DISTRACTION: Compare time spent on core humanized projects vs. time lost tweaking system configurations, dotfiles, or automation bots.\n"
+        "- SANITIZER INTERCEPTS: Mention if any API keys/credentials were redacted.\n\n"
+        "Input Context Telemetry:\n"
+        "────────────────────────────────────────────────────────────────────\n"
+        "OPERATOR DATA:\n"
+        f"• Username: @{github_username}\n"
+        f"• Total Monthly Focus: {focus_hours} hours across {total_sessions} sessions\n\n"
+        "VCS & COMMIT INTENT LOGS:\n"
+        f"• Git Diff Stats: +{additions} additions, -{deletions} deletions\n"
+        f"• Merged PRs: {merged_prs} | Active Branches Tracked: {branch_names_list}\n"
+        "• Raw Local Commit Messages (Cleaned/Stripped):\n"
+        f"{cleaned_commits_block}\n\n"
+        "EDITOR BUFFERS & TRACKED WORKSPACES:\n"
+        f"• Active Project Distributions: {project_distributions_percentages}\n"
+        f"• Top Edited File Buffers: {top_editor_buffers_with_durations}\n\n"
+        "SHELL BEHAVIOR & COMPILATION TELEMETRY:\n"
+        f"• Amends Count: {amends_count} executions of `git commit --amend`\n"
+        f"• Late Night Key Ratio: {midnight_percentage}% of strokes between 11PM-5AM\n"
+        f"• Terminal Success Rate: {success_rate}% ({failed_builds} failed exit codes, {passed_builds} successful)\n"
+        f"• Notable Toolchain Keywords Detected: {tool_keywords_list}\n"
+        f"• Security Intercepts: {redacted_secrets_count} local credential redactions\n"
+        "────────────────────────────────────────────────────────────────────\n\n"
+        "Output Format Requirements:\n"
+        "You must return EXACTLY the following structure (with emojis and headings). Do NOT add markdown formatting. Each description must be 2 to 3 lines long:\n\n"
+        "🧠 IMPOSTER SYNDROME INDEX: <calculated_percentage>%\n"
+        "   <Wit/roast description>\n\n"
+        "🌌 THE MIDNIGHT OIL FACTOR: <Calculated level (e.g. High/Low/Extreme)>\n"
+        "   <Wit/roast description>\n\n"
+        "🩸 THE TRENCH WAR DIAGNOSTIC\n"
+        "   <Wit/roast description>\n\n"
+        "🛡️ THE ARCHITECTURAL PURGE\n"
+        "   <Wit/roast description>\n\n"
+        "🤖 SIDE-QUEST DISTRACTION\n"
+        "   <Wit/roast description>\n\n"
+        "🔒 SANITIZER INTERCEPTS: <Status, e.g. Clean or Redacted>\n"
+        "   <Wit/roast description>\n\n"
+        "[VERDICT] <2-3 lines summarizing the month's performance and developers' traits>\n\n"
+        "Output format: Return ONLY the raw, polished console text lines matching the segments of the behavioral audit panel. No introductory conversational text, no markdown styling, no explanations."
+    )
+    
+    return _send_llm_request(prompt, api_key, api_base_url, model_name, provider)
+
+

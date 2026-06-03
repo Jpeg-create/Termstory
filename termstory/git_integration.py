@@ -115,3 +115,78 @@ def get_project_commits(project_path: str, since_ts: int) -> List[Dict]:
         return commits
     except Exception:
         return []
+
+
+def get_timeframe_git_stats(project_paths: List[str], since_ts: int, until_ts: int) -> Dict:
+    """Collect aggregate git additions/deletions and branch merges for a list of project paths."""
+    total_additions = 0
+    total_deletions = 0
+    merged_branches = []
+    
+    for path in project_paths:
+        abs_path = os.path.abspath(os.path.expanduser(path))
+        if not is_git_repo(abs_path):
+            continue
+            
+        # 1. Get additions and deletions
+        try:
+            res = subprocess.run(
+                [
+                    "git", "-C", abs_path, "log", 
+                    f"--since={since_ts}", f"--until={until_ts}",
+                    "--numstat", "--pretty=format:"
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False
+            )
+            if res.returncode == 0:
+                for line in res.stdout.splitlines():
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        try:
+                            add = int(parts[0])
+                            del_ = int(parts[1])
+                            total_additions += add
+                            total_deletions += del_
+                        except ValueError:
+                            pass # Handles binary files marked with '-'
+        except Exception:
+            pass
+            
+        # 2. Get merges and branch names
+        try:
+            res = subprocess.run(
+                [
+                    "git", "-C", abs_path, "log", 
+                    f"--since={since_ts}", f"--until={until_ts}",
+                    "--merges", "--pretty=format:%s"
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False
+            )
+            if res.returncode == 0:
+                for line in res.stdout.splitlines():
+                    m = re.search(r"Merge branch '([^']+)'", line)
+                    if m:
+                        merged_branches.append(m.group(1))
+                        continue
+                    m = re.search(r"Merge pull request #\d+ from \S+/(\S+)", line)
+                    if m:
+                        merged_branches.append(m.group(1))
+                        continue
+                    m = re.search(r"Merge branch '(\S+)'", line)
+                    if m:
+                        merged_branches.append(m.group(1))
+        except Exception:
+            pass
+            
+    return {
+        "additions": total_additions,
+        "deletions": total_deletions,
+        "merged_branches": list(set(merged_branches))
+    }
+

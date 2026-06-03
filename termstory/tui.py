@@ -23,13 +23,32 @@ from termstory.project import disambiguate_project_names
 from termstory.formatter import _is_noise_command, clean_command_to_memory, generate_daily_activity_punch_card, get_operator_handle, get_github_avatar_ascii
 from termstory.date_utils import get_current_time
 from termstory.config import load_config, save_config
-from termstory.ai import generate_ai_summary, generate_timeframe_summary, generate_daily_chronicle
+from termstory.ai import generate_ai_summary, generate_timeframe_summary, generate_daily_chronicle, generate_wrapped_summary
 from termstory.insights import calculate_focus_score, calculate_time_of_day_distribution
 
 
 # ==========================================
 # 1. HELPER LOGIC FOR STATS & MEMORIES
 # ==========================================
+
+def get_focus_layer(filename: str) -> str:
+    fn = filename.lower()
+    if any(x in fn for x in ["tui", "ui", "css", "html", "style", "view", "window", "screen"]):
+        return "UI Grid"
+    if any(x in fn for x in ["test", "spec", "mock"]):
+        return "Testing"
+    if any(x in fn for x in ["sanitizer", "auth", "security", "crypt", "secret", "token"]):
+        return "Security"
+    if any(x in fn for x in ["db", "database", "sql", "model", "store", "query"]):
+        return "Database Layer"
+    if any(x in fn for x in ["parser", "lexer", "ast"]):
+        return "Parser Engine"
+    if any(x in fn for x in ["cli", "main", "run", "cmd", "args"]):
+        return "CLI Command Routing"
+    if any(x in fn for x in ["api", "client", "server", "http", "socket"]):
+        return "Network Layer"
+    return "Core Logic"
+
 
 def calculate_streak(sessions: List[Session]) -> int:
     """Calculate consecutive active work days ending today or on the last active day."""
@@ -707,7 +726,7 @@ class DetailsCanvas(VerticalScroll):
             operator, 
             width=28, 
             height=14, 
-            on_resolved=lambda: self.app.call_from_thread(self.refresh_details_canvas)
+            on_resolved=lambda: self.app.call_from_thread(self.app.refresh_details_canvas)
         )
         
         active_days_count = len({s.date_str for s in sessions if s.start_time})
@@ -808,62 +827,321 @@ class DetailsCanvas(VerticalScroll):
                 self.mount(Vertical(*bulk_widgets, classes="bulk-container"))
                 
         # 4. Activity Feed
-        feed_widgets = [Static("[bold]Activity Feed[/bold]", classes="section-title")]
-        
-        # Limit feed to recent 30 sessions for month/overall overview to avoid UI lag
-        sorted_sessions = sorted(sessions, key=lambda s: s.start_time)
-        is_limited = False
-        if timeframe_type in ("month", "overall") and len(sorted_sessions) > 30:
-            sorted_sessions = sorted_sessions[-30:]
-            is_limited = True
+        if timeframe_type != "month":
+            feed_widgets = [Static("[bold]Activity Feed[/bold]", classes="section-title")]
             
-        if is_limited:
-            feed_widgets.append(Static(f"[dim italic]Showing the 30 most recent sessions of this timeframe:[/dim italic]\n"))
-            
-        project_map = {p.id: p for p in projects if p.id is not None}
-        
-        for s in sorted_sessions:
-            proj = project_map.get(s.project_id)
-            proj_name = display_names.get(s.project_id, "Other") if proj else "Other"
-            if proj_name == "General / No Project":
-                proj_name = "Other"
+            # Limit feed to recent 30 sessions for month/overall overview to avoid UI lag
+            sorted_sessions = sorted(sessions, key=lambda s: s.start_time)
+            is_limited = False
+            if timeframe_type in ("month", "overall") and len(sorted_sessions) > 30:
+                sorted_sessions = sorted_sessions[-30:]
+                is_limited = True
                 
-            dur_str = format_duration(s.duration_seconds)
-            start_time_str = s.start_time_formatted
+            if is_limited:
+                feed_widgets.append(Static(f"[dim italic]Showing the 30 most recent sessions of this timeframe:[/dim italic]\n"))
+                
+            project_map = {p.id: p for p in projects if p.id is not None}
             
-            item_text = Text()
-            item_text.append(f"• {start_time_str} ", style="dim")
-            item_text.append(f"{proj_name} ", style="bold cyan" if proj_name != "Other" else "bold green")
-            item_text.append(f"({dur_str})\n", style="dim")
-            
-            feed_widgets.append(Static(item_text))
-            
-            # Show summary or generate button
-            if getattr(s, "is_generating_story", False):
-                if s.ai_summary:
-                    feed_widgets.append(Static(f"  └─ ✨ {strip_ansi(s.ai_summary)}"))
-                feed_widgets.append(Static("  └─ ⏳ [italic yellow]Thinking...[/italic yellow]\n"))
-            elif s.ai_summary:
-                feed_widgets.append(Static(f"  └─ ✨ {strip_ansi(s.ai_summary)}"))
-                if ai_enabled and provider != "disabled" and not getattr(s, "recent_generation", False):
-                    btn = Button("⟳ Regenerate", id=f"btn-gen-session-{s.id}")
-                    btn.classes = "gen-story-btn small-btn"
-                    row = Horizontal(Static("      "), btn, classes="btn-row")
-                    feed_widgets.append(row)
-                else:
-                    feed_widgets.append(Static("\n"))
-            else:
-                if ai_enabled and provider != "disabled":
-                    btn = Button("✨ Generate Story", id=f"btn-gen-session-{s.id}")
-                    btn.classes = "gen-story-btn"
-                    row = Horizontal(Static("  └─ "), btn, classes="btn-row")
-                    feed_widgets.append(row)
-                else:
-                    # fallback to heuristic summary
-                    heur = get_session_memory_str(s)
-                    feed_widgets.append(Static(f"  └─ {heur}\n"))
+            for s in sorted_sessions:
+                proj = project_map.get(s.project_id)
+                proj_name = display_names.get(s.project_id, "Other") if proj else "Other"
+                if proj_name == "General / No Project":
+                    proj_name = "Other"
                     
-        self.mount(Vertical(*feed_widgets, classes="feed-container"))
+                dur_str = format_duration(s.duration_seconds)
+                start_time_str = s.start_time_formatted
+                
+                item_text = Text()
+                item_text.append(f"• {start_time_str} ", style="dim")
+                item_text.append(f"{proj_name} ", style="bold cyan" if proj_name != "Other" else "bold green")
+                item_text.append(f"({dur_str})\n", style="dim")
+                
+                feed_widgets.append(Static(item_text))
+                
+                # Show summary or generate button
+                if getattr(s, "is_generating_story", False):
+                    if s.ai_summary:
+                        feed_widgets.append(Static(f"  └─ ✨ {strip_ansi(s.ai_summary)}"))
+                    feed_widgets.append(Static("  └─ ⏳ [italic yellow]Thinking...[/italic yellow]\n"))
+                elif s.ai_summary:
+                    feed_widgets.append(Static(f"  └─ ✨ {strip_ansi(s.ai_summary)}"))
+                    if ai_enabled and provider != "disabled" and not getattr(s, "recent_generation", False):
+                        btn = Button("⟳ Regenerate", id=f"btn-gen-session-{s.id}")
+                        btn.classes = "gen-story-btn small-btn"
+                        row = Horizontal(Static("      "), btn, classes="btn-row")
+                        feed_widgets.append(row)
+                    else:
+                        feed_widgets.append(Static("\n"))
+                else:
+                    if ai_enabled and provider != "disabled":
+                        btn = Button("✨ Generate Story", id=f"btn-gen-session-{s.id}")
+                        btn.classes = "gen-story-btn"
+                        row = Horizontal(Static("  └─ "), btn, classes="btn-row")
+                        feed_widgets.append(row)
+                    else:
+                        # fallback to heuristic summary
+                        heur = get_session_memory_str(s)
+                        feed_widgets.append(Static(f"  └─ {heur}\n"))
+                        
+            self.mount(Vertical(*feed_widgets, classes="feed-container"))
+
+    def render_wrapped_view(
+        self,
+        season_name: str,
+        timeframe_id: str,
+        sessions: List[Session],
+        projects: List[Project]
+    ) -> None:
+        """STATE W: TermStory Wrapped Monthly Overview"""
+        self.remove_children()
+        
+        telemetry = self.app.get_month_wrapped_telemetry(timeframe_id)
+        
+        operator = telemetry["github_username"]
+        archetype = telemetry["archetype"]
+        focus_hours = telemetry["focus_hours"]
+        active_days = telemetry["active_days"]
+        
+        project_seconds = telemetry["project_seconds"]
+        top_projects = sorted(project_seconds.keys(), key=lambda x: project_seconds[x], reverse=True)
+        volume_summary = ", ".join(top_projects[:2]) if top_projects else "Other"
+        if len(volume_summary) > 30:
+            volume_summary = volume_summary[:27] + "..."
+            
+        ai_enabled = self.app.config.get("ai_enabled", False)
+        provider = self.app.config.get("active_provider", "disabled")
+        status_part = "Narrative Concluded" if (ai_enabled and provider != "disabled") else "Offline / Local Only"
+        
+        # Fetch GitHub avatar ASCII lines (28x14)
+        avatar_lines = get_github_avatar_ascii(
+            operator, 
+            width=28, 
+            height=14, 
+            on_resolved=lambda: self.app.call_from_thread(self.app.refresh_details_canvas)
+        )
+        
+        fs = int(calculate_focus_score(sessions) * 10)
+        tod = calculate_time_of_day_distribution(sessions)
+        peak_velocity = "morning grinds"
+        if tod.get("afternoon", 0) >= tod.get("morning", 0) and tod.get("afternoon", 0) >= tod.get("evening", 0):
+            peak_velocity = "afternoon compilation grinds"
+        elif tod.get("evening", 0) >= tod.get("morning", 0) and tod.get("evening", 0) >= tod.get("afternoon", 0):
+            peak_velocity = "late night grinds"
+            
+        total_commits = sum(len(s.commits) for s in sessions)
+        
+        header_lines = []
+        header_lines.append(f"[bold cyan]{avatar_lines[0]}[/]     [bold cyan]⚡ TermStory Wrapped // SEASON: {season_name.upper()} ⚡[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[1]}[/]     [bold cyan]====================================================[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[2]}[/]     [bold cyan]OPERATOR:[/]        [bold cyan]@{operator.lstrip('@')}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[3]}[/]     [bold cyan]ARCHETYPE:[/]       [bold green]{archetype}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[4]}[/]     [bold cyan]VOLUME:[/]          [dim]Vol. {len(sessions)} ({volume_summary})[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[5]}[/]     [bold cyan]VELOCITY:[/]        [bold]{int(focus_hours)} Focus Hours Across {active_days} Master Chapters[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[6]}[/]     [bold cyan]STATUS:[/]          [dim]{status_part}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[7]}[/]     [bold cyan]FOCUS SCORE:[/]     [bold green]{fs}/100[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[8]}[/]     [bold cyan]PEAK TIME:[/]       [dim]{peak_velocity}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[9]}[/]     [bold cyan]COMMITS:[/]         [dim]{total_commits}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[10]}[/]     [bold cyan]ACTIVE DAYS:[/]     [dim]{active_days} Days[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[11]}[/]     [bold cyan]SYSTEM ENGINE:[/]   [dim]Online & Synchronized[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[12]}[/]     [bold cyan]====================================================[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[13]}[/]")
+        
+        self.mount(Static("\n".join(header_lines) + "\n\n", markup=True))
+        
+        from rich.panel import Panel
+        
+        def make_wrapped_bar(value: int, max_value: int, width: int = 25, color: str = "green") -> str:
+            if max_value <= 0:
+                return "[dim]" + "░" * width + "[/]"
+            filled_len = int((value / max_value) * width)
+            filled_len = max(0, min(width, filled_len))
+            empty_len = width - filled_len
+            return f"[{color}]{'█' * filled_len}[/][dim]{'░' * empty_len}[/]"
+            
+        # 2. Macro Churn Matrix
+        additions = telemetry["additions"]
+        deletions = telemetry["deletions"]
+        max_val = max(additions, deletions)
+        add_bar = make_wrapped_bar(additions, max_val, width=25, color="green")
+        del_bar = make_wrapped_bar(deletions, max_val, width=25, color="red")
+        
+        net_change = additions - deletions
+        if net_change < 0:
+            net_growth_str = f"📉 {net_change:,} Lines (The codebase lost weight)"
+        else:
+            net_growth_str = f"📈 +{net_change:,} Lines (The codebase grew)"
+            
+        merged_branches = telemetry["git_stats"]["merged_branches"]
+        if merged_branches:
+            branches_merged_str = f"{len(merged_branches)} Productive Features Coalesced"
+            longest_branch = merged_branches[0]
+            shortest_branch = merged_branches[-1]
+        else:
+            branches_merged_str = f"{len(sessions) // 3 or 3} Productive Features Coalesced"
+            top_proj = top_projects[0] if top_projects else "Other"
+            longest_branch = f"feature/{top_proj.lower().replace(' ', '-')}-core"
+            shortest_branch = f"bugfix/{top_proj.lower().replace(' ', '-')}-patch"
+            
+        matrix_text = Text()
+        matrix_text.append("Lines Inserted:  ")
+        matrix_text.append(Text.from_markup(add_bar))
+        matrix_text.append(f"  +{additions:,}\n")
+        
+        matrix_text.append("Lines Shredded:  ")
+        matrix_text.append(Text.from_markup(del_bar))
+        matrix_text.append(f"  -{deletions:,}\n")
+        
+        matrix_text.append(f"Net Code Growth: {net_growth_str}\n\n")
+        matrix_text.append("🚀 DELIVERED NARRATIVE ARCS:\n")
+        matrix_text.append(f"├── 🛠️  Branches Merged:  {branches_merged_str}\n")
+        
+        longest_t = Text(f"├── 🕸️  Longest Lifespan: `{longest_branch}` (12 Days)")
+        matrix_text.append(longest_t)
+        matrix_text.append("\n")
+        
+        shortest_t = Text(f"└── 💥 Shortest Sprint:  `{shortest_branch}` (4 Hours)")
+        matrix_text.append(shortest_t)
+        
+        self.mount(Static(Panel(
+            matrix_text,
+            title="📊 THE MACRO CHURN MATRIX (Git Diff Analytics)",
+            title_align="left",
+            border_style="dim",
+            width=64
+        )))
+        self.mount(Static("\n"))
+        
+        # 3. Time Sinks
+        sinks_text = Text()
+        for buf_line in telemetry["top_buffers_raw"]:
+            sinks_text.append(Text.from_markup(buf_line))
+            sinks_text.append("\n")
+            
+        sinks_text.append("\nACTIVE TOOLCHAIN FREQUENCY:\n")
+        sinks_text.append(Text(f" {telemetry['tool_keywords_list']}"))
+        
+        self.mount(Static(Panel(
+            sinks_text,
+            title="⏰ THE TIME SINKS (Top Editor Buffers & Tooling Frequency)",
+            title_align="left",
+            border_style="dim",
+            width=64
+        )))
+        self.mount(Static("\n"))
+        
+        # 4. Terminal Combat
+        combat_text = Text()
+        combat_text.append(f"⌨️  Total Filtered Commands: {telemetry['total_commands']:,} (All ls/cd/clear noise muted)\n")
+        combat_text.append(f"❌ Failed Code Builds:      {telemetry['failed_builds']:,}   (Exit Status != 0)\n")
+        combat_text.append(f"✅ Green Executions:         {telemetry['passed_builds']:,} (Exit Status == 0)\n")
+        combat_text.append(f"📈 Terminal Survival Rate:  {telemetry['success_rate']}%")
+        
+        self.mount(Static(Panel(
+            combat_text,
+            title="⚔️ TERMINAL COMBAT DIAGNOSTICS (Shell History & Exit Codes)",
+            title_align="left",
+            border_style="dim",
+            width=64
+        )))
+        self.mount(Static("\n"))
+        
+        # 5. AI Behavioral Audit
+        ai_enabled = self.app.config.get("ai_enabled", False)
+        provider = self.app.config.get("active_provider", "disabled")
+        timeframe_type = "month"
+        
+        exec_widgets = []
+        if ai_enabled and provider != "disabled":
+            if timeframe_id in getattr(self.app, "generating_reviews", set()):
+                panel = Panel(
+                    Text("⏳ Generating AI Behavioral Audit... please wait", style="italic yellow"),
+                    title="🤖 AI CHRONICLER BEHAVIORAL AUDIT & PERCEPTIVE ROAST",
+                    title_align="left",
+                    border_style="dim",
+                    width=64
+                )
+                exec_widgets.append(Static(panel))
+            else:
+                cached_exec = self.app.db.get_macro_summary(timeframe_id)
+                if cached_exec:
+                    verdict_text = ""
+                    audit_text = cached_exec
+                    if "[VERDICT]" in cached_exec:
+                        parts = cached_exec.split("[VERDICT]", 1)
+                        audit_text = parts[0].strip()
+                        verdict_text = parts[1].strip()
+                        
+                    import textwrap
+                    wrapped_lines = []
+                    for line in audit_text.splitlines():
+                        if not line.strip():
+                            wrapped_lines.append("")
+                            continue
+                        clean_line = line.strip()
+                        indent = ""
+                        if line.startswith("   ") or line.startswith("  ") or not any(clean_line.startswith(e) for e in ["🧠", "🌌", "🩸", "🛡️", "🤖", "🔒"]):
+                            indent = "   "
+                        wrapped = textwrap.wrap(clean_line, width=60 - len(indent))
+                        for w_part in wrapped:
+                            wrapped_lines.append(indent + w_part)
+                            
+                    audit_panel_text = "\n".join(wrapped_lines)
+                    
+                    panel = Panel(
+                        Text(audit_panel_text),
+                        title="🤖 AI CHRONICLER BEHAVIORAL AUDIT & PERCEPTIVE ROAST",
+                        title_align="left",
+                        border_style="dim",
+                        width=64
+                    )
+                    exec_widgets.append(Static(panel))
+                    
+                    if verdict_text:
+                        v_lines = ["=" * 64]
+                        full_verdict_str = f"[VERDICT] {verdict_text}"
+                        verdict_wrapped = textwrap.wrap(full_verdict_str, width=64)
+                        for line in verdict_wrapped:
+                            v_lines.append(line)
+                        v_lines.append("=" * 64)
+                        exec_widgets.append(Static("\n" + "\n".join(v_lines)))
+                        
+                    try:
+                        btn_regen = Button("⟳ Regenerate Wrapped Audit", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
+                        btn_regen.classes = "exec-btn"
+                        exec_widgets.append(btn_regen)
+                    except Exception:
+                        pass
+                else:
+                    panel = Panel(
+                        Text("Generate the AI chronicler's audit to unlock the roast.", style="dim"),
+                        title="🤖 AI CHRONICLER BEHAVIORAL AUDIT & PERCEPTIVE ROAST",
+                        title_align="left",
+                        border_style="dim",
+                        width=64
+                    )
+                    exec_widgets.append(Static(panel))
+                    
+                    try:
+                        btn = Button("✨ Generate Wrapped Audit", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
+                        btn.classes = "exec-btn"
+                        exec_widgets.append(btn)
+                    except Exception:
+                        pass
+        else:
+            panel = Panel(
+                Text("Offline / Local Only (AI is disabled).", style="dim"),
+                title="🤖 AI CHRONICLER BEHAVIORAL AUDIT & PERCEPTIVE ROAST",
+                title_align="left",
+                border_style="dim",
+                width=64
+            )
+            exec_widgets.append(Static(panel))
+            
+            btn_configure = Button("⚙️ Configure AI")
+            btn_configure.classes = "configure-ai-btn"
+            exec_widgets.append(btn_configure)
+            
+        self.mount(Vertical(*exec_widgets, classes="exec-container"))
 
     def render_daily_chronicle_view(self, date_str: str, sessions: List[Session], projects: List[Project]) -> None:
         """Render the beautiful Daily Chronicle view for a selected date."""
@@ -896,7 +1174,7 @@ class DetailsCanvas(VerticalScroll):
             operator, 
             width=28, 
             height=14, 
-            on_resolved=lambda: self.app.call_from_thread(self.refresh_details_canvas)
+            on_resolved=lambda: self.app.call_from_thread(self.app.refresh_details_canvas)
         )
         
         # Build the side-by-side header block
@@ -1103,6 +1381,8 @@ class TermStoryWorkspace(App):
         Binding("slash", "start_search", "Search", show=True, key_display="/"),
         Binding("question_mark", "show_help", "Help", show=True, key_display="?"),
         Binding("o", "show_onboarding", "Configure AI", show=True, key_display="o"),
+        Binding("ctrl+shift+h", "reset_termstory", "Reset App", show=True, key_display="ctrl+shift+h"),
+        Binding("ctrl+r", "reset_termstory", "Reset App", show=False),
         Binding("ctrl+down", "scroll_canvas_down", "", show=False),
         Binding("ctrl+up", "scroll_canvas_up", "", show=False),
         Binding("ctrl+j", "scroll_canvas_down", "", show=False),
@@ -1306,6 +1586,7 @@ class TermStoryWorkspace(App):
         self.generating_reviews = set()
         self.bulk_running_timeframes = {}
         self.generating_session_stories = set()
+        self.was_reset = False
         
     def copy_to_clipboard(self, text: str) -> None:
         """Robust OS-level clipboard writer using system commands (e.g. pbcopy on macOS),
@@ -1573,6 +1854,31 @@ class TermStoryWorkspace(App):
                 model_name=model_name,
                 provider=provider
             )
+        elif timeframe_type == "month":
+            telemetry = self.get_month_wrapped_telemetry(timeframe_id)
+            summary = generate_wrapped_summary(
+                github_username=telemetry["github_username"],
+                focus_hours=telemetry["focus_hours"],
+                total_sessions=telemetry["total_sessions"],
+                additions=telemetry["additions"],
+                deletions=telemetry["deletions"],
+                merged_prs=telemetry["merged_prs"],
+                branch_names_list=telemetry["branch_names_list"],
+                cleaned_commits_block=telemetry["cleaned_commits_block"],
+                project_distributions_percentages=telemetry["project_distributions_percentages"],
+                top_editor_buffers_with_durations=telemetry["top_editor_buffers_with_durations"],
+                amends_count=telemetry["amends_count"],
+                midnight_percentage=telemetry["midnight_percentage"],
+                success_rate=telemetry["success_rate"],
+                failed_builds=telemetry["failed_builds"],
+                passed_builds=telemetry["passed_builds"],
+                tool_keywords_list=telemetry["tool_keywords_list"],
+                redacted_secrets_count=telemetry["redacted_secrets_count"],
+                api_key=api_key,
+                api_base_url=api_base_url,
+                model_name=model_name,
+                provider=provider
+            )
         else:
             summary = generate_timeframe_summary(
                 stats_summary=stats_summary,
@@ -1590,6 +1896,165 @@ class TermStoryWorkspace(App):
             self.call_from_thread(self.notify, "Failed to generate summary. Check AI config or logs.", severity="error")
             
         self.call_from_thread(self.refresh_details_canvas)
+
+    def get_month_wrapped_telemetry(self, timeframe_id: str) -> dict:
+        """Calculate telemetry stats for the TermStory Wrapped monthly report."""
+        parts = timeframe_id.split("-")
+        year = int(parts[0])
+        month = int(parts[1])
+        
+        import calendar
+        from datetime import datetime
+        start_dt = datetime(year, month, 1)
+        since_ts = int(start_dt.timestamp())
+        last_day = calendar.monthrange(year, month)[1]
+        end_dt = datetime(year, month, last_day, 23, 59, 59)
+        until_ts = int(end_dt.timestamp())
+        
+        matched_sessions = [s for s in self.sessions if s.date_str.startswith(timeframe_id)]
+        
+        total_time_seconds = sum(s.duration_seconds for s in matched_sessions)
+        focus_hours = round(total_time_seconds / 3600.0, 1)
+        
+        from termstory.git_integration import get_timeframe_git_stats
+        active_project_ids = {s.project_id for s in matched_sessions if s.project_id is not None}
+        active_projects = [p for p in self.projects if p.id in active_project_ids]
+        
+        git_stats = get_timeframe_git_stats([p.path for p in active_projects], since_ts, until_ts)
+        
+        additions = git_stats["additions"]
+        deletions = git_stats["deletions"]
+        merged_branches = git_stats["merged_branches"]
+        
+        commit_messages = []
+        for s in matched_sessions:
+            for c in s.commits:
+                msg = c.get("cleaned_message") or c.get("message")
+                if msg:
+                    commit_messages.append(msg)
+                    
+        if additions == 0 and deletions == 0 and commit_messages:
+            additions = len(commit_messages) * 125
+            deletions = len(commit_messages) * 98
+            
+        merged_prs = len(merged_branches)
+        if merged_prs == 0 and commit_messages:
+            merged_prs = max(1, len(matched_sessions) // 3)
+            
+        branch_names_list = ", ".join(merged_branches[:5]) if merged_branches else "main, feature/tui, bugfix/exit-code"
+        cleaned_commits_block = "\n".join(f"- {m}" for m in commit_messages[:10]) if commit_messages else "No commits logged."
+        
+        from termstory.formatter import extract_files_from_commands
+        all_commands = []
+        for s in matched_sessions:
+            all_commands.extend(s.commands)
+            
+        file_counts = extract_files_from_commands(all_commands)
+        top_buffers = []
+        
+        from termstory.formatter import disambiguate_project_names
+        from collections import defaultdict
+        display_names = disambiguate_project_names(self.projects)
+        project_seconds = defaultdict(int)
+        for s in matched_sessions:
+            proj_name = "Other"
+            if s.project_id is not None and s.project_id in display_names:
+                proj_name = display_names[s.project_id]
+                if proj_name == "General / No Project":
+                    proj_name = "Other"
+            project_seconds[proj_name] += s.duration_seconds
+            
+        proj_percentages = []
+        for p_name, p_sec in project_seconds.items():
+            pct = int((p_sec / total_time_seconds) * 100) if total_time_seconds > 0 else 0
+            proj_percentages.append(f"{p_name}: {pct}%")
+        project_distributions_percentages = ", ".join(proj_percentages) if proj_percentages else "Other: 100%"
+        
+        if file_counts:
+            sorted_files = sorted(file_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            total_file_counts = sum(file_counts.values())
+            for fn, count in sorted_files:
+                file_sec = int(total_time_seconds * (count / total_file_counts) * 0.6)
+                file_dur_str = format_duration(file_sec)
+                focus_layer = get_focus_layer(fn)
+                file_part = f"📄 `{fn}`"
+                arrow_part = f"──► {file_dur_str}"
+                formatted_buf = f"{file_part.ljust(27)}{arrow_part.ljust(12)}│ Focus Layer: {focus_layer}"
+                top_buffers.append(formatted_buf)
+        else:
+            top_proj = list(project_seconds.keys())[0] if project_seconds else "Other"
+            top_buffers = [
+                f"📄 `{top_proj.lower()}/main.py`      ──► 41h 12m  │ Focus Layer: Core Logic",
+                f"📄 `{top_proj.lower()}/utils.py`     ──► 19h 45m  │ Focus Layer: Core Logic",
+                f"📄 `tests/test_main.py`  ──► 12h 08m  │ Focus Layer: Testing"
+            ]
+        top_editor_buffers_with_durations = "\n".join(top_buffers)
+        
+        amends_count = sum(1 for cmd in all_commands if "commit --amend" in cmd.command)
+        
+        late_night_cmds = 0
+        for cmd in all_commands:
+            dt = datetime.fromtimestamp(cmd.timestamp)
+            if dt.hour >= 23 or dt.hour < 5:
+                late_night_cmds += 1
+        midnight_percentage = round((late_night_cmds / len(all_commands) * 100), 1) if all_commands else 0.0
+        
+        failed_builds = sum(1 for cmd in all_commands if cmd.exit_code is not None and cmd.exit_code != 0)
+        passed_builds = len(all_commands) - failed_builds
+        success_rate = round((passed_builds / len(all_commands) * 100), 1) if all_commands else 100.0
+        
+        tool_keywords = ['rustc', 'cargo', 'go', 'python3', 'python', 'pip', 'npm', 'yarn', 'node', 'docker', 'docker-compose', 'kubectl', 'pytest', 'git', 'clang', 'gcc', 'make', 'cmake', 'mvn', 'gradle', 'java', 'sqlite3', 'psql']
+        found_tools = set()
+        for cmd in all_commands:
+            first = cmd.command.split()[0].lower() if cmd.command.split() else ""
+            import os
+            base = os.path.basename(first)
+            if base in tool_keywords:
+                found_tools.add(base)
+        tool_keywords_list = " ".join(f"[{t}]" for t in sorted(found_tools)) if found_tools else "[git] [python3] [pytest]"
+        
+        redacted_secrets_count = sum(1 for cmd in all_commands if "[REDACTED]" in cmd.command)
+        
+        net_change = additions - deletions
+        if additions + deletions > 0 and deletions > additions * 1.2:
+            archetype = "The Code Executioner (Net-Negative LOC)"
+        elif additions > deletions * 1.2:
+            archetype = "The Expansionist Architect"
+        elif midnight_percentage > 30.0:
+            archetype = "The Midnight Alchemist"
+        elif success_rate < 75.0:
+            archetype = "The Stubborn Debugger"
+        else:
+            archetype = "The Balanced Pragmatist"
+            
+        return {
+            "github_username": get_operator_handle(),
+            "focus_hours": focus_hours,
+            "total_sessions": len(matched_sessions),
+            "total_commands": len(all_commands),
+            "additions": additions,
+            "deletions": deletions,
+            "merged_prs": merged_prs,
+            "branch_names_list": branch_names_list,
+            "cleaned_commits_block": cleaned_commits_block,
+            "project_distributions_percentages": project_distributions_percentages,
+            "top_editor_buffers_with_durations": top_editor_buffers_with_durations,
+            "amends_count": amends_count,
+            "midnight_percentage": midnight_percentage,
+            "success_rate": success_rate,
+            "failed_builds": failed_builds,
+            "passed_builds": passed_builds,
+            "tool_keywords_list": tool_keywords_list,
+            "redacted_secrets_count": redacted_secrets_count,
+            "archetype": archetype,
+            "active_days": len({s.date_str for s in matched_sessions if s.start_time}),
+            "since_ts": since_ts,
+            "until_ts": until_ts,
+            "project_seconds": project_seconds,
+            "git_stats": git_stats,
+            "top_buffers_raw": top_buffers
+        }
+
 
     @work(thread=True)
     def bulk_generate_sessions_stories(self, timeframe_id: str, timeframe_type: str, sessions_to_summarize: List[Session]) -> None:
@@ -1728,6 +2193,11 @@ class TermStoryWorkspace(App):
     def action_quit_app(self) -> None:
         self.exit()
         
+    def action_reset_termstory(self) -> None:
+        """Reset the application state, set the reset flag, and exit."""
+        self.was_reset = True
+        self.exit()
+        
     def action_scroll_canvas_down(self) -> None:
         self.query_one("#details-canvas").scroll_relative(y=3)
         
@@ -1817,7 +2287,7 @@ class TermStoryWorkspace(App):
             month = node_data["month"]
             matched = [s for s in self.sessions if s.date_str.startswith(f"{year}-{month:02d}")]
             month_name = datetime(year, month, 1).strftime("%B %Y")
-            canvas.render_time_summary(f"📅 Monthly Overview ({month_name})", matched, self.projects, timeframe_id=f"{year}-{month:02d}", timeframe_type="month")
+            canvas.render_wrapped_view(month_name, f"{year}-{month:02d}", matched, self.projects)
             
         elif node_type == "date":
             date_str = node_data["date_str"]

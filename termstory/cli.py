@@ -108,6 +108,21 @@ def show_ui(
     from termstory.tui import TermStoryWorkspace
     app_tui = TermStoryWorkspace(db, days_limit=None if all_history else days)
     app_tui.run()
+    
+    if getattr(app_tui, "was_reset", False):
+        import shutil
+        db_dir = os.path.expanduser("~/.termstory")
+        if os.path.exists(db_dir):
+            try:
+                for filename in os.listdir(db_dir):
+                    file_path = os.path.join(db_dir, filename)
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+            except Exception:
+                pass
+        console.print("\n[bold green]✨ TermStory state, configuration, and database have been successfully reset![/]")
 
 
 # ==========================================
