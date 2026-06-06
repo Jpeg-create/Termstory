@@ -643,11 +643,18 @@ class NavigationTree(Tree):
 
                         sorted_sessions = sorted(nested[m_key][day_key][p_id], key=lambda x: x.start_time)
                         for s in sorted_sessions:
-                            memory = get_session_memory_str(s)
                             start_str = datetime.fromtimestamp(s.start_time).strftime("%H:%M")
                             end_str = datetime.fromtimestamp(s.end_time).strftime("%H:%M")
 
-                            session_label = f"✨ {memory} [dim]({start_str} - {end_str})[/]"
+                            # Legacy Archive sessions get a distinct label so users instantly
+                            # understand the data has synthetic (recovered) timestamps
+                            if getattr(s, "is_legacy", False):
+                                cmd_count = len(s.commands)
+                                session_label = f"📦 Legacy Archive [dim]({cmd_count} recovered cmds)[/]"
+                            else:
+                                memory = get_session_memory_str(s)
+                                session_label = f"✨ {memory} [dim]({start_str} - {end_str})[/]"
+
                             proj_node.add_leaf(
                                 session_label,
                                 data={"type": "session", "project_id": p_id, "session_id": s.id}
@@ -1336,7 +1343,33 @@ class DetailsCanvas(VerticalScroll):
 
     def render_session_details(self, project: Optional[Project], session: Session) -> None:
         self.remove_children()
-        
+
+        # ── Legacy Archive: special banner for synthetic-timestamp sessions ──────
+        if getattr(session, "is_legacy", False):
+            cmd_count = len(session.commands)
+            archive_header = Text()
+            archive_header.append("📦 LEGACY ARCHIVE  (Pre-TermStory History)\n", style="bold yellow")
+            archive_header.append("─" * 60 + "\n", style="dim")
+            self.mount(Static(archive_header))
+            self.mount(Static(
+                "[dim]These commands were recovered from your shell history file without\n"
+                "timestamps. They have been grouped here safely to preserve your history.\n"
+                "Exact dates and times cannot be reconstructed.\n\n"
+                "[bold]Tip:[/bold] Run [cyan]termstory ui[/cyan] again after some new commands to see\n"
+                "real sessions appear alongside this archive.[/dim]\n"
+            ))
+            self.mount(Static(f"[dim]Commands recovered: [bold]{cmd_count}[/bold][/dim]\n\n"))
+
+            cmd_section = Text()
+            cmd_section.append("💻 Recovered Commands:\n", style="bold yellow")
+            for cmd in session.commands:
+                # Show ALL commands in the archive — no noise filtering — so the user
+                # can verify their data was recovered completely
+                cmd_section.append(f"  • {cmd.command}\n", style="dim")
+            self.mount(Static(cmd_section))
+            return
+        # ── End Legacy Archive ───────────────────────────────────────────────────
+
         proj_name = project.name if project else "Other"
         if proj_name == "General / No Project":
             proj_name = "Other"

@@ -28,6 +28,7 @@ class Command:
     session_id: Optional[int] = None   # FK to sessions table
     project_id: Optional[int] = None   # FK to projects table
     id: Optional[int] = None    # Primary key in DB (if stored)
+    is_legacy: bool = False     # True = synthetic timestamp (no real timestamp in history file)
     
     @property
     def readable_time(self) -> str:
@@ -48,6 +49,7 @@ class Session:
     recent_generation: Optional[str] = None
     _cached_date_str: Optional[str] = None
     _cached_start_time_formatted: Optional[str] = None
+    is_legacy: bool = False     # True = every command in this session has a synthetic timestamp
 
     
     @property

@@ -23,7 +23,10 @@ def parse_zsh_history(filepath: str, existing_lookup: Optional[Dict[str, List[in
 
     raw_lines = []
     try:
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+        # Use errors='replace' instead of 'ignore' so Zsh metafied bytes (0x83)
+        # are replaced with a safe placeholder instead of silently eaten,
+        # guaranteeing the rest of the file continues to be read.
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
             for line in f:
                 raw_lines.append(line)
     except Exception:
@@ -170,6 +173,8 @@ def parse_zsh_history(filepath: str, existing_lookup: Optional[Dict[str, List[in
     resolved_commands = []
     
     # 1-Second Step-Back Algorithm for legacy commands
+    # Tag every synthetic-timestamp command with is_legacy=True so downstream
+    # components (session builder, TUI) can identify and label this data clearly.
     n_legacy = len(legacy_items)
     for idx, item in enumerate(legacy_items):
         fallback_ts = anchor_time + (idx - n_legacy + 1)
@@ -178,7 +183,8 @@ def parse_zsh_history(filepath: str, existing_lookup: Optional[Dict[str, List[in
             timestamp=resolved_ts,
             command=item["command"],
             exit_code=0,
-            duration=0
+            duration=0,
+            is_legacy=True   # Mark as synthetic — no real timestamp was found
         ))
         
     for item in timestamped_items:
