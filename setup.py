@@ -7,7 +7,7 @@ setup(
     description="Local shell history parsing, session grouping, and visual daily chronicle terminal dashboard",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
-    url="https://github.com/atuinsh/termstory",
+    url="https://github.com/bitflicker64/Termstory",
     packages=find_packages(exclude=["tests", "tests.*"]),
     include_package_data=True,
     install_requires=[
