@@ -116,4 +116,52 @@ def test_cli_reset_commands(monkeypatch):
     finally:
         sys.argv = sys_argv_orig
 
+def test_cli_ui_onboarding_missing_timestamps_yes(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_cli_ui.db"
+    monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
+    
+    # Mock run_ingestion to do nothing
+    monkeypatch.setattr("termstory.cli.run_ingestion", lambda db: None)
+    
+    # Flag missing timestamps manually
+    monkeypatch.setenv("TERMSTORY_MISSING_TIMESTAMPS", "1")
+    
+    # Mock open for ~/.zshrc appending
+    zshrc_file = tmp_path / ".zshrc"
+    monkeypatch.setattr("os.path.expanduser", lambda p: str(zshrc_file) if p == "~/.zshrc" else p)
+    
+    runner = CliRunner()
+    result = runner.invoke(app, ["ui"], input="y\n")
+    
+    assert result.exit_code == 0
+    assert "Done! Please restart your terminal" in result.stdout
+    # Verify file was appended correctly
+    assert zshrc_file.exists()
+    content = zshrc_file.read_text()
+    assert "setopt EXTENDED_HISTORY" in content
+
+def test_cli_ui_onboarding_missing_timestamps_no(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_cli_ui.db"
+    monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
+    
+    # Mock run_ingestion
+    monkeypatch.setattr("termstory.cli.run_ingestion", lambda db: None)
+    
+    # Flag missing timestamps manually
+    monkeypatch.setenv("TERMSTORY_MISSING_TIMESTAMPS", "1")
+    
+    # Mock TermStoryWorkspace.run to exit instead of running actual Textual TUI
+    workspace_runs = []
+    def mock_run(self):
+        workspace_runs.append(True)
+    monkeypatch.setattr("termstory.tui.TermStoryWorkspace.run", mock_run)
+    
+    runner = CliRunner()
+    result = runner.invoke(app, ["ui"], input="n\n")
+    
+    assert "Continuing with legacy history fallback" in result.stdout
+    assert len(workspace_runs) == 1
+
 

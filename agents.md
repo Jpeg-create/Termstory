@@ -131,6 +131,14 @@ Interfaces with LLMs using Python's native `urllib.request`.
   - **AI Chronicler Audit**: Integrated `generate_wrapped_summary` for the overall review, allowing the user to generate/regenerate an all-time perceptive roast/behavioral audit.
 * **Files**: [tui.py](file:///Users/himanshuverma/Projects/termstory/termstory/tui.py), [test_tui.py](file:///Users/himanshuverma/Projects/termstory/tests/test_tui.py).
 
+### ⚙️ Phase 8: Interactive Configuration Consent (White Glove Setup)
+* **Status**: Fully implemented, integrated, and verified.
+* **Features**:
+  - **Missing Timestamps Detection**: Parser detects if Zsh history lacks extended history prefixes and sets `TERMSTORY_MISSING_TIMESTAMPS` environment variable.
+  - **White Glove Onboarding Consent**: CLI show_ui command blocks startup to prompt users with missing timestamps to automatically append `setopt EXTENDED_HISTORY` to their `~/.zshrc`.
+  - **Safe Exit & Fallback**: Exits gracefully with clear restart instructions if user confirms (`Y`), or continues directly to the legacy TUI fallback if user declines (`N`).
+* **Files**: [cli.py](file:///Users/himanshuverma/Projects/termstory/termstory/cli.py), [parser.py](file:///Users/himanshuverma/Projects/termstory/termstory/parser.py), [test_cli_commands.py](file:///Users/himanshuverma/Projects/termstory/tests/test_cli_commands.py).
+
 ---
 
 ## 4. Running Verification

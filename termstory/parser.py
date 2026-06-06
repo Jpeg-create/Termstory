@@ -34,6 +34,7 @@ def parse_zsh_history(filepath: str) -> List[Command]:
 
     if not has_extended:
         # Zsh Legacy Fallback Mode:
+        os.environ["TERMSTORY_MISSING_TIMESTAMPS"] = "1"
         # Establish the OS Anchor using file modification time (mtime)
         try:
             anchor_time = int(os.path.getmtime(filepath))

@@ -140,6 +140,29 @@ def show_ui(
     
     run_ingestion(db)
     
+    # Check if Zsh missing timestamps was flagged (Zsh Legacy Fallback Mode)
+    if os.environ.get("TERMSTORY_MISSING_TIMESTAMPS") == "1":
+        console.print("\n[bold yellow]⚠️  TermStory needs your shell to record timestamps to build your timeline accurately.[/bold yellow]")
+        try:
+            response = input("Would you like TermStory to automatically enable EXTENDED_HISTORY in your ~/.zshrc file? [Y/n] ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            console.print()
+            response = "n"
+            
+        if response in ("y", "yes"):
+            zshrc_path = os.path.expanduser("~/.zshrc")
+            try:
+                with open(zshrc_path, "a") as f:
+                    f.write("\n# TermStory Timekeeping\nsetopt EXTENDED_HISTORY\n")
+                console.print("\n[bold green]✅ Done! Please restart your terminal or run `source ~/.zshrc` for the changes to take effect, then run `termstory ui` again.[/bold green]\n")
+                import sys
+                sys.exit(0)
+            except Exception as e:
+                console.print(f"[bold red]Error modifying ~/.zshrc: {e}[/bold red]")
+                console.print("Continuing with legacy history fallback...")
+        else:
+            console.print("Continuing with legacy history fallback...")
+            
     from termstory.tui import TermStoryWorkspace
     app_tui = TermStoryWorkspace(db, days_limit=None if all_history else days)
     app_tui.run()
