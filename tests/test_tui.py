@@ -801,6 +801,124 @@ async def test_wrapped_view_generation_and_layout(monkeypatch):
             assert "Mock verdict text." in cached
 
 
+@pytest.mark.asyncio
+async def test_tui_empty_state_handling():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test_empty.db")
+        db = Database(db_path)
+        db.init_db()
+        
+        # Instantiate workspace with 0 sessions
+        app = TermStoryWorkspace(
+            db, 
+            days_limit=30, 
+            config_override={"has_seen_onboarding": True, "ai_enabled": True, "active_provider": "openai"}
+        )
+        app.auto_select_today_on_mount = False
+        
+        async with app.run_test() as pilot:
+            canvas = app.query_one("#details-canvas")
+            
+            # Since there are no sessions, on_mount will trigger render_time_summary with 0 sessions
+            # rendering the empty state welcome message
+            canvas.render_time_summary("📊 Overall Dashboard Summary", [], [])
+            await pilot.pause()
+            
+            # Verify the text is rendered correctly
+            content = ""
+            for widget in canvas.children:
+                r = getattr(widget, "_Static__content", None) or getattr(widget, "_renderable", None) or getattr(widget, "renderable", None)
+                if r is not None:
+                    if hasattr(r, "plain"):
+                        content += r.plain
+                    elif hasattr(r, "markup"):
+                        content += r.markup
+                    else:
+                        content += str(r)
+            
+            assert "Welcome to TermStory!" in content
+            assert "We couldn't find any shell history yet." in content
+            assert "Try running some terminal commands, or check your macOS Privacy permissions." in content
+            
+            # Verify no timeframe summary buttons are present
+            from textual.css.query import NoMatches
+            with pytest.raises(NoMatches):
+                canvas.query_one(".exec-btn")
+            with pytest.raises(NoMatches):
+                canvas.query_one(".bulk-btn")
+
+
+@pytest.mark.asyncio
+async def test_tui_deep_search_scope_escape():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test_search.db")
+        db = Database(db_path)
+        db.init_db()
+        
+        # 1. Setup a project and a session
+        p1 = Project(id=1, name="My Awesome Project", path="~/projects/my-awesome-project", first_seen=1000, last_seen=1000, session_count=1, total_time=100)
+        cmd1 = Command(timestamp=1000, command="git commit -m 'initial commit'", session_id=1, project_id=1)
+        s1 = Session(id=1, start_time=1000, end_time=1100, duration_seconds=100, project_id=1, commands=[cmd1])
+        db.save_data([p1], [s1], [cmd1])
+        
+        # 2. Instantiate TUI
+        app = TermStoryWorkspace(
+            db, 
+            days_limit=30, 
+            config_override={"has_seen_onboarding": True, "ai_enabled": False}
+        )
+        app.auto_select_today_on_mount = False
+        
+        async with app.run_test() as pilot:
+            # Check original sessions back up
+            assert len(app.original_sessions) == 0
+            assert app.is_deep_search_active is False
+            
+            # Press '/' to open search box
+            await pilot.press("/")
+            search_box = app.query_one("#search-box")
+            assert search_box.styles.display == "block"
+            
+            # Type search query
+            await pilot.click("#search-box")
+            await pilot.press(*list("initial"))
+            await pilot.pause()
+            
+            # Trigger deep search by pressing enter
+            await pilot.press("enter")
+            await pilot.pause()
+            
+            # Verify deep search is active and populated
+            assert app.is_deep_search_active is True
+            assert app.deep_search_query == "initial"
+            
+            # Verify tree root title is customized
+            tree = app.query_one("#history-navigator")
+            timeline_root = None
+            for child in tree.root.children:
+                if child.data and child.data.get("category") == "timeline":
+                    timeline_root = child
+                    break
+            assert timeline_root is not None
+            assert "Search Results:" in str(timeline_root.label)
+            assert "initial" in str(timeline_root.label)
+            
+            # Verify escape key clears the deep search
+            await pilot.press("escape")
+            await pilot.pause()
+            
+            assert app.is_deep_search_active is False
+            new_timeline_root = None
+            for child in tree.root.children:
+                if child.data and child.data.get("category") == "timeline":
+                    new_timeline_root = child
+                    break
+            assert new_timeline_root is not None
+            assert "Search Results:" not in str(new_timeline_root.label)
+            assert "Timeline" in str(new_timeline_root.label)
+
+
+
 
 
 

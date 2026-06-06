@@ -50,9 +50,21 @@ def run_ingestion(db: Database) -> None:
     """Helper to parse active history files and store them in the database"""
     history_files = get_history_files()
     if not history_files:
+        Console(stderr=True).print(
+            "\n[bold yellow]⚠️  Warning: No shell history files detected or readable.[/bold yellow]\n"
+            "TermStory could not find ~/.zsh_history or other active history files.\n"
+            "If you are on macOS, please ensure your Terminal app has Full Disk Access in System Settings.\n"
+        )
         return
         
     commands = parse_all_histories(history_files)
+    if len(commands) == 0:
+        Console(stderr=True).print(
+            "\n[bold yellow]⚠️  Warning: Shell history parser returned 0 commands.[/bold yellow]\n"
+            "Your history file might be empty, unreadable, or permission denied.\n"
+            "If you are on macOS, please check and grant Full Disk Access to your Terminal app.\n"
+        )
+        
     sessions = create_sessions(commands)
     projects = detect_projects(sessions)
     db.save_data(projects, sessions, commands)
@@ -95,7 +107,8 @@ def search_history(
     results = results[:limit]
     
     output = format_search_results(query, results, detailed=detailed)
-    console.print(output)
+    from rich.text import Text
+    console.print(Text.from_ansi(output))
 
 def perform_reset():
     """Reset all TermStory state, configuration, and database files on disk"""

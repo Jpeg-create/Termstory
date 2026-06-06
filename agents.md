@@ -32,7 +32,7 @@ Chains chronological commands into sessions.
 Maps directory paths to logical project names.
 * **VCS Root Detection**: Recursively scans parent directories looking for `.git`, `.hg`, or `.svn` root folders.
 * **Configuration Inspection**: Reads metadata from build configurations (`pom.xml`, `package.json`, `setup.py`, `Cargo.toml`, etc.) to extract clean project names.
-* **Normalization**: Maps empty/general workspaces to `"Other"`.
+* **Normalization & Fallback**: Maps empty/general workspaces to `"Other"`. If a directory contains no VCS markers or configuration descriptors and does not lie inside a common project workspace folder (e.g. `~/Projects/`), it falls back to the user's home directory so its commands and sessions are cleanly grouped in `"Other"`.
 
 ### D. Git Correlator ([git_integration.py](file:///Users/himanshuverma/Projects/termstory/termstory/git_integration.py))
 Enriches shell activity by fetching corresponding Git commits.
@@ -70,8 +70,8 @@ Interfaces with LLMs using Python's native `urllib.request`.
 
 ### 🔍 `termstory search`
 * **Status**: Implemented, tested, and pushed.
-* **Features**: Groups by project, collapses multiple daily sessions into a single line per day, prioritizes commits over commands, filters noise commands, and maps General to Other.
-* **Files**: [formatter.py](file:///Users/himanshuverma/Projects/termstory/termstory/formatter.py) (`format_search_results`, `_is_noise_command`, `_get_session_memory`, `_collapse_by_day`).
+* **Features**: Groups by project, collapses multiple daily sessions into a single line per day, prioritizes commits over commands, filters noise commands, maps General to Other, and searches AI-generated session summaries in addition to command text, project names, and git commits.
+* **Files**: [formatter.py](file:///Users/himanshuverma/Projects/termstory/termstory/formatter.py) (`format_search_results`, `_is_noise_command`, `_get_session_memory`, `_collapse_by_day`), [database.py](file:///Users/himanshuverma/Projects/termstory/termstory/database.py) (`search_sessions`).
 
 ### 📋 `termstory today`
 * **Status**: Implemented, tested, and pushed.
@@ -97,6 +97,7 @@ Interfaces with LLMs using Python's native `urllib.request`.
   - Interactive onboarding popup screen (`OnboardingScreen`) triggered when no config is detected, supporting key shortcuts for Groq (`Ctrl+G`), OpenAI (`Ctrl+A`), Ollama (`Ctrl+L`), Custom (`Ctrl+C`), or Disable (`Ctrl+D`).
 * **Performance**: Utilizes `@work` async workers to fetch AI summaries on background threads. Implemented session date caching to eliminate rendering lags.
 * **Robust OS-Level Copying**: Overrides `copy_to_clipboard` to pipe copy commands directly to local OS utilities (`pbcopy`, `xclip`/`xsel`/`wl-copy`, `clip`) so that copy shortcut `c` writes selections directly to the host operating system's clipboard even when OSC 52 terminal sequences are disabled.
+* **Unified Global Search with Scope Escape**: Combined the TUI and CLI search logic on a single SQLite matching engine. TUI filters the pre-loaded 90-day timeline in real-time as you type, and escapes to an all-time deep history search on `Enter`. Pressing `Escape` or clearing the input immediately restores the normal timeline.
 * **Files**: [tui.py](file:///Users/himanshuverma/Projects/termstory/termstory/tui.py), [test_tui.py](file:///Users/himanshuverma/Projects/termstory/tests/test_tui.py), [cli.py](file:///Users/himanshuverma/Projects/termstory/termstory/cli.py).
 
 ### 🎨 Phase 4: UI Refinement, Timeline Alignment & Rich Narrative Summaries
@@ -114,6 +115,13 @@ Interfaces with LLMs using Python's native `urllib.request`.
   - **Activity Punch-Card**: Integrated a dynamic horizontal activity punch-card visual strip (`00:00 ░░░░░ 06:00 ... 23:59`) based on hourly command intensity counts.
   - **TUI Integration**: Completely unified the Daily Chronicle inside `termstory ui`'s `DetailsCanvas` when date nodes are selected, maintaining standard session detail feeds at the bottom for full visibility and single-session interactions.
 * **Files**: [tui.py](file:///Users/himanshuverma/Projects/termstory/termstory/tui.py), [ai.py](file:///Users/himanshuverma/Projects/termstory/termstory/ai.py), [formatter.py](file:///Users/himanshuverma/Projects/termstory/termstory/formatter.py), [cli.py](file:///Users/himanshuverma/Projects/termstory/termstory/cli.py).
+
+### 🛡️ Phase 6: Empty State Safeguards & Stricter Project Resolution Fallback
+* **Status**: Fully implemented, integrated, and verified.
+* **Features**:
+  - **TUI Empty State Banner & Guards**: Handled empty shell histories by showing a welcoming troubleshooting/permission guide in `DetailsCanvas`, displaying a warning notification on mount, and guarding/disabling AI summary actions when 0 sessions are ingested.
+  - **Project Fallback Strictness**: Overhauled `find_project_root` in [project.py](file:///Users/himanshuverma/Projects/termstory/termstory/project.py) to return `home` (instead of the absolute folder path) when a folder is not inside standard project roots or paths, correctly mapping irrelevant folders (like `~/.ssh`, `~/Downloads`) to `"Other"`.
+* **Files**: [project.py](file:///Users/himanshuverma/Projects/termstory/termstory/project.py), [tui.py](file:///Users/himanshuverma/Projects/termstory/termstory/tui.py), [cli.py](file:///Users/himanshuverma/Projects/termstory/termstory/cli.py), [test_project.py](file:///Users/himanshuverma/Projects/termstory/tests/test_project.py), [test_tui.py](file:///Users/himanshuverma/Projects/termstory/tests/test_tui.py).
 
 ---
 

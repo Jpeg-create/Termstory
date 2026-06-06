@@ -142,3 +142,107 @@ def test_macro_summaries_caching(tmp_path):
     assert db.get_macro_summary(timeframe_id) == "Updated review summary text."
 
 
+def test_session_deduplication_stable_key(tmp_path):
+    db_file = tmp_path / "test_dedup.db"
+    db = Database(str(db_file))
+    db.init_db()
+    
+    now_ts = int(time.time())
+    
+    # Save a session with project 1
+    project1 = Project(id=1, name="Proj A", path="~/proj-a", first_seen=now_ts, last_seen=now_ts, session_count=1, total_time=0)
+    cmd1 = Command(timestamp=now_ts, command="git status", exit_code=0, session_id=1, project_id=1)
+    session1 = Session(id=1, start_time=now_ts, end_time=now_ts, duration_seconds=0, project_id=1, commands=[cmd1])
+    
+    db.save_data([project1], [session1], [cmd1])
+    
+    # Simulate a second run where the SAME session (same start_time) gets resolved to project 2
+    project2 = Project(id=2, name="Proj B", path="~/proj-b", first_seen=now_ts, last_seen=now_ts, session_count=1, total_time=0)
+    cmd1_updated = Command(timestamp=now_ts, command="git status", exit_code=0, session_id=2, project_id=2)
+    session2 = Session(id=2, start_time=now_ts, end_time=now_ts, duration_seconds=0, project_id=2, commands=[cmd1_updated])
+    
+    db.save_data([project2], [session2], [cmd1_updated])
+    
+    # Verify we still only have ONE session in the database, and it updated to project2
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, start_time, project_id FROM sessions")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    assert len(rows) == 1
+    assert rows[0][1] == now_ts
+    assert rows[0][2] == project2.id  # Project was updated/overwritten for the existing session
+
+
+def test_migration_deduplicates_legacy_data(tmp_path):
+    db_file = tmp_path / "test_migration.db"
+    
+    # 1. Create a legacy database without UNIQUE index and manually insert duplicate sessions
+    import sqlite3
+    conn = sqlite3.connect(str(db_file))
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_time INTEGER NOT NULL,
+            end_time INTEGER NOT NULL,
+            duration_seconds INTEGER NOT NULL,
+            project_id INTEGER,
+            ai_summary TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE commands (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp INTEGER NOT NULL,
+            command TEXT NOT NULL,
+            exit_code INTEGER NOT NULL,
+            session_id INTEGER,
+            project_id INTEGER
+        )
+    """)
+    
+    # Insert legacy duplicates (same start_time, different project_ids/ids)
+    cursor.execute("INSERT INTO sessions (start_time, end_time, duration_seconds, project_id, ai_summary) VALUES (?, ?, ?, ?, ?)", (1000, 1050, 50, 1, None))
+    s1_id = cursor.lastrowid
+    cursor.execute("INSERT INTO sessions (start_time, end_time, duration_seconds, project_id, ai_summary) VALUES (?, ?, ?, ?, ?)", (1000, 1060, 60, 2, "AI Summary"))
+    s2_id = cursor.lastrowid
+    
+    # Insert commands belonging to them
+    cursor.execute("INSERT INTO commands (timestamp, command, exit_code, session_id, project_id) VALUES (?, ?, ?, ?, ?)", (1001, "cmd1", 0, s1_id, 1))
+    cursor.execute("INSERT INTO commands (timestamp, command, exit_code, session_id, project_id) VALUES (?, ?, ?, ?, ?)", (1002, "cmd2", 0, s2_id, 2))
+    
+    conn.commit()
+    conn.close()
+    
+    # 2. Instantiate and run Database.init_db() which runs the migration
+    db = Database(str(db_file))
+    db.init_db()
+    
+    # 3. Verify that duplicate sessions are merged and orphaned commands reassigned
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT id, start_time, project_id, ai_summary FROM sessions")
+    sessions_rows = cursor.fetchall()
+    
+    cursor.execute("SELECT session_id, command FROM commands ORDER BY timestamp ASC")
+    commands_rows = cursor.fetchall()
+    
+    conn.close()
+    
+    # Should have merged into 1 session
+    assert len(sessions_rows) == 1
+    keeper_id = sessions_rows[0][0]
+    
+    # The keeper should have preserved the AI summary
+    assert sessions_rows[0][3] == "AI Summary"
+    
+    # Both commands should now belong to the keeper session
+    assert len(commands_rows) == 2
+    assert commands_rows[0][0] == keeper_id
+    assert commands_rows[1][0] == keeper_id
+
+
+

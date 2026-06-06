@@ -544,7 +544,7 @@ class NavigationTree(Tree):
         super().__init__(*args, **kwargs)
         self.show_root = False
     
-    def populate(self, projects: List[Project], sessions: List[Session], search_query: Optional[str] = None) -> None:
+    def populate(self, projects: List[Project], sessions: List[Session], search_query: Optional[str] = None, is_deep_search: bool = False) -> None:
         # Flag to inform the app that the tree is being built
         self.app._populating_tree = True
         try:
@@ -554,7 +554,7 @@ class NavigationTree(Tree):
             display_names = disambiguate_project_names(projects)
 
             # Pre-filter sessions if a search query is active
-            if search_query:
+            if search_query and not is_deep_search:
                 q = search_query.lower()
                 filtered_sessions = []
                 for s in sessions:
@@ -596,7 +596,12 @@ class NavigationTree(Tree):
                     p_name = "Other"
                 return (0, p_name.lower())
 
-            timeline_root = self.root.add("📅 Timeline", data={"type": "category", "category": "timeline"}, expand=True)
+            if is_deep_search and search_query:
+                timeline_title = f"🔍 Search Results: \"{search_query}\""
+            else:
+                timeline_title = "📅 Timeline"
+
+            timeline_root = self.root.add(timeline_title, data={"type": "category", "category": "timeline"}, expand=True)
             self.root.add("📁 Projects", data={"type": "category", "category": "projects"}, expand=False)
             self.root.add("🧠 Insights", data={"type": "category", "category": "insights"}, expand=False)
 
@@ -718,6 +723,13 @@ class DetailsCanvas(VerticalScroll):
         """STATE A: Time Summary View (Today/Week/Month or overall)"""
         self.remove_children()
         
+        if len(sessions) == 0:
+            self.mount(Static(Text.from_markup(
+                "\n\n  [bold cyan]Welcome to TermStory![/bold cyan]\n\n"
+                "  We couldn't find any shell history yet. Try running some terminal commands, or check your macOS Privacy permissions."
+            )))
+            return
+            
         from rich.panel import Panel
         
         total_time_seconds = sum(s.duration_seconds for s in sessions)
@@ -1719,6 +1731,18 @@ class TermStoryWorkspace(App):
         project_ids = list(set(s.project_id for s in self.sessions if s.project_id is not None))
         self.projects = self.db.get_projects_by_ids(project_ids)
         
+        self.original_sessions = self.sessions
+        self.original_projects = self.projects
+        self.is_deep_search_active = False
+        self.deep_search_query = ""
+        
+        if len(self.sessions) == 0:
+            self.notify(
+                "Warning: No shell history found. Your ~/.zsh_history might be unreadable. Check macOS Full Disk Access.",
+                severity="warning",
+                timeout=10.0
+            )
+        
         # Render top stats header
         self.update_stats_header()
         
@@ -2230,6 +2254,10 @@ class TermStoryWorkspace(App):
             self.action_show_onboarding()
             return
             
+        if len(self.sessions) == 0:
+            self.notify("No sessions found to summarize.", severity="error")
+            return
+            
         button_id = event.button.id
         if not button_id:
             return
@@ -2319,10 +2347,69 @@ class TermStoryWorkspace(App):
         search_box.styles.display = "block"
         search_box.focus()
         
+    def run_deep_search(self, query: str) -> None:
+        """Query the entire database history and repopulate the tree."""
+        # 1. Query matching session details from DB (gets all matched session dicts)
+        results = self.db.search_sessions(query)
+        
+        if not results:
+            self.notify(f"No results found for deep search: '{query}'", severity="warning")
+            return
+            
+        # 2. Extract session IDs and project IDs
+        session_ids = [r["session_id"] for r in results]
+        project_ids = list(set(r["project_id"] for r in results if r["project_id"] is not None))
+        
+        # 3. Fetch full Session and Project entities from the database using our helpers
+        deep_sessions = self.db.get_sessions_by_ids(session_ids)
+        deep_projects = self.db.get_projects_by_ids(project_ids)
+        
+        # 4. Set deep search state
+        self.is_deep_search_active = True
+        self.deep_search_query = query
+        self.sessions = deep_sessions
+        self.projects = deep_projects
+        
+        # 5. Populate tree
+        tree = self.query_one("#history-navigator")
+        tree.populate(self.projects, self.sessions, search_query=query, is_deep_search=True)
+        
+        # 6. Show total matched results in notification
+        self.notify(f"Found {len(deep_sessions)} sessions across all-time history.")
+        
+    def action_clear_deep_search(self) -> None:
+        """Clear active deep search and restore the original timeline."""
+        if not getattr(self, "is_deep_search_active", False):
+            return
+        self.is_deep_search_active = False
+        self.deep_search_query = ""
+        self.sessions = getattr(self, "original_sessions", [])
+        self.projects = getattr(self, "original_projects", [])
+        
+        # Clear the search box value without triggering a new search
+        search_box = self.query_one("#search-box")
+        search_box.value = ""
+        search_box.styles.display = "none"
+        
+        # Repopulate tree
+        tree = self.query_one("#history-navigator")
+        tree.populate(self.projects, self.sessions)
+        
+        # Repopulate details canvas with overall dashboard summary
+        canvas = self.query_one("#details-canvas")
+        canvas.render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects, timeframe_id="overall", timeframe_type="overall")
+        
+        self.notify("Deep search cleared. Restored timeline.")
+        
     def on_key(self, event) -> None:
         search_box = self.query_one("#search-box")
-        if search_box.has_focus:
-            if event.key == "escape":
+        if event.key == "escape":
+            if getattr(self, "is_deep_search_active", False):
+                self.action_clear_deep_search()
+                self.query_one("#history-navigator").focus()
+                event.prevent_default()
+                event.stop()
+            elif search_box.has_focus:
                 search_box.value = ""
                 search_box.styles.display = "none"
                 self.query_one("#history-navigator").focus()
@@ -2334,16 +2421,29 @@ class TermStoryWorkspace(App):
         if event.input.id != "search-box":
             return
         search_box = self.query_one("#search-box")
+        query = search_box.value.strip()
+        if not query:
+            return
+            
         search_box.styles.display = "none"
         self.query_one("#history-navigator").focus()
+        self.run_deep_search(query)
         
     def on_input_changed(self, event: Input.Changed) -> None:
         # Only handle changes from the search box, not onboarding inputs
         if event.input.id != "search-box":
             return
         query = event.value.strip()
-        # Debounce the search to avoid UI lag
-        self.debounce_search(query)
+        if not query:
+            # If search was cleared, clear any deep search state
+            if getattr(self, "is_deep_search_active", False):
+                self.is_deep_search_active = False
+                self.deep_search_query = ""
+                self.sessions = getattr(self, "original_sessions", [])
+                self.projects = getattr(self, "original_projects", [])
+            self.debounce_search("")
+        else:
+            self.debounce_search(query)
         
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         # Avoid handling selection while tree is being repopulated or app is shutting down

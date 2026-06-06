@@ -1,5 +1,8 @@
 from termstory.models import Command, Session, Project
-from termstory.project import detect_projects, extract_cd_path, humanize_project_name, disambiguate_project_names
+from termstory.project import (
+    detect_projects, extract_cd_path, humanize_project_name, 
+    disambiguate_project_names, _is_project_indicative_command, _extract_file_args
+)
 
 def test_extract_cd_path():
     assert extract_cd_path("cd ~/projects/incubator-hugegraph") == "~/projects/incubator-hugegraph"
@@ -31,7 +34,15 @@ def test_disambiguate_project_names():
     assert names[2] == "HugeGraph (/home/user/personal)"
     assert names[3] == "Other" # Unchanged as it's unique
 
-def test_detect_projects():
+def test_detect_projects(monkeypatch):
+    import os
+    original_listdir = os.listdir
+    def mock_listdir(path):
+        if path == "/Users/username/my-awesome-project":
+            return [".git"]
+        return original_listdir(path)
+    monkeypatch.setattr(os, "listdir", mock_listdir)
+
     # Session 1: working in project A
     cmd1 = Command(timestamp=1000, command="cd ~/projects/incubator-hugegraph")
     cmd2 = Command(timestamp=1010, command="git status")
@@ -98,3 +109,115 @@ def test_find_project_root(tmp_path, monkeypatch):
     fallback_dir = tmp_path / "Projects" / "fallback-project" / "sub" / "dir"
     fallback_dir.mkdir(parents=True)
     assert find_project_root(str(fallback_dir)) == str(tmp_path / "Projects" / "fallback-project")
+
+    # 4. Test fallback to home when not under Projects and no markers exist
+    other_dir = tmp_path / "Downloads" / "some-random-folder"
+    other_dir.mkdir(parents=True)
+    assert find_project_root(str(other_dir)) == str(tmp_path)
+
+
+# ── New tests for Pass 2 & Pass 3 ────────────────────────────────────
+
+def test_is_project_indicative_command():
+    """Test that project-indicative commands are correctly identified."""
+    assert _is_project_indicative_command("git commit -m 'fix bug'") == True
+    assert _is_project_indicative_command("git push origin main") == True
+    assert _is_project_indicative_command("npm run dev") == True
+    assert _is_project_indicative_command("cargo build") == True
+    assert _is_project_indicative_command("python manage.py runserver") == True
+    assert _is_project_indicative_command("pytest") == True
+    assert _is_project_indicative_command("make") == True
+    
+    # Non-indicative commands
+    assert _is_project_indicative_command("ls -la") == False
+    assert _is_project_indicative_command("echo hello") == False
+    assert _is_project_indicative_command("cd ~/Projects") == False
+    assert _is_project_indicative_command("cat file.txt") == False
+
+
+def test_extract_file_args():
+    """Test file argument extraction from commands."""
+    assert "src/app.py" in _extract_file_args("vim src/app.py")
+    assert "setup.py" in _extract_file_args("python setup.py install")
+    assert len(_extract_file_args("git status")) == 0
+    # URLs and env vars should be skipped
+    assert len(_extract_file_args("curl https://example.com")) == 0
+    assert len(_extract_file_args("echo $HOME")) == 0
+
+
+def test_neighbor_propagation_sandwich():
+    """Pass 3: 'Other' session sandwiched between two sessions of the same project gets assigned."""
+    # Session 1: known project (via cd)
+    s1 = Session(id=1, start_time=1000, end_time=1100, duration_seconds=100, project_id=None,
+                 commands=[Command(timestamp=1000, command="cd ~/projects/incubator-hugegraph"),
+                           Command(timestamp=1050, command="git status")])
+    
+    # Session 2: no cd, no indicative commands
+    s2 = Session(id=2, start_time=2000, end_time=2100, duration_seconds=100, project_id=None,
+                 commands=[Command(timestamp=2000, command="echo hello")])
+    
+    # Session 3: same project (via cd)
+    s3 = Session(id=3, start_time=3000, end_time=3100, duration_seconds=100, project_id=None,
+                 commands=[Command(timestamp=3000, command="cd ~/projects/incubator-hugegraph"),
+                           Command(timestamp=3050, command="git log")])
+    
+    projects = detect_projects([s1, s2, s3])
+    
+    # Session 2 should be propagated to the same project as s1 and s3
+    assert s2.project_id is not None
+    assert s2.project_id == s1.project_id
+    assert s2.project_id == s3.project_id
+
+
+def test_neighbor_propagation_follow():
+    """Pass 3: 'Other' session immediately following a known project session gets assigned."""
+    # Session 1: known project
+    s1 = Session(id=1, start_time=1000, end_time=1100, duration_seconds=100, project_id=None,
+                 commands=[Command(timestamp=1000, command="cd ~/projects/incubator-hugegraph"),
+                           Command(timestamp=1050, command="git status")])
+    
+    # Session 2: no cd, follows within 2 hours
+    s2 = Session(id=2, start_time=2000, end_time=2100, duration_seconds=100, project_id=None,
+                 commands=[Command(timestamp=2000, command="echo hello")])
+    
+    projects = detect_projects([s1, s2])
+    
+    assert s2.project_id is not None
+    assert s2.project_id == s1.project_id
+
+
+def test_neighbor_propagation_long_gap_no_propagation():
+    """Pass 3: 'Other' session with a gap > 2 hours should NOT be propagated."""
+    # Session 1: known project
+    s1 = Session(id=1, start_time=1000, end_time=1100, duration_seconds=100, project_id=None,
+                 commands=[Command(timestamp=1000, command="cd ~/projects/incubator-hugegraph"),
+                           Command(timestamp=1050, command="git status")])
+    
+    # Session 2: 3-hour gap
+    gap = 3 * 3600  # 3 hours
+    s2 = Session(id=2, start_time=1100 + gap, end_time=1200 + gap, duration_seconds=100, project_id=None,
+                 commands=[Command(timestamp=1100 + gap, command="echo hello")])
+    
+    projects = detect_projects([s1, s2])
+    
+    # Session 2 should remain unassigned
+    assert s2.project_id is None
+
+
+def test_git_command_inference_without_cd():
+    """Pass 2: Session with git commands but no cd should be inferred from nearby project sessions."""
+    # Session 1: known project
+    s1 = Session(id=1, start_time=1000, end_time=1100, duration_seconds=100, project_id=None,
+                 commands=[Command(timestamp=1000, command="cd ~/projects/incubator-hugegraph"),
+                           Command(timestamp=1050, command="git status")])
+    
+    # Session 2: git commit without cd, within 1 hour of s1
+    s2 = Session(id=2, start_time=2000, end_time=2200, duration_seconds=200, project_id=None,
+                 commands=[Command(timestamp=2000, command="git commit -m 'fix parser'"),
+                           Command(timestamp=2100, command="git push origin main")])
+    
+    projects = detect_projects([s1, s2])
+    
+    # Session 2 should be assigned to same project via git command inference
+    assert s2.project_id is not None
+    assert s2.project_id == s1.project_id

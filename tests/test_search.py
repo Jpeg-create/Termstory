@@ -71,3 +71,10 @@ def test_database_commits_and_search(tmp_path):
     
     results = db.search_sessions("tests", project_filter="HugeGraph")
     assert len(results) == 0
+
+    # 9. Test search_sessions matching session AI summary
+    db.save_session_ai_summary(1, "Refactored Docker process supervision scripts")
+    
+    results = db.search_sessions("supervision")
+    assert len(results) == 1
+    assert results[0]["session_id"] == 1

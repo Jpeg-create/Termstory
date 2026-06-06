@@ -349,7 +349,7 @@ Pressing `?` opens a centered modal help overlay containing keyboard shortcuts. 
 | **Global Navigation** | `?` | Toggle Shortcuts Help Menu |
 | | `/` | Open dynamic regex Search / Filter box |
 | | `o` | Open AI Configuration Onboarding Screen |
-| | `q` / `Esc` | Quit dashboard / Close active modal / Clear search filter |
+| | `q` / `Esc` | Quit dashboard / Close active modal / Clear search filter / Reset deep search |
 | **Canvas Scrolling** | `Ctrl+Down` / `Ctrl+j` | Scroll details canvas down |
 | | `Ctrl+Up` / `Ctrl+k` | Scroll details canvas up |
 | | `Ctrl+PgDn` / `Ctrl+PgUp` | Scroll details canvas by half-page |
@@ -358,6 +358,13 @@ Pressing `?` opens a centered modal help overlay containing keyboard shortcuts. 
 | **Onboarding Form** | `Ctrl+g` / `Ctrl+a` | Choose Groq / Choose OpenAI |
 | | `Ctrl+l` / `Ctrl+c` | Choose Ollama / Choose Custom API |
 | | `Ctrl+d` | Disable AI (strictly offline, local TUI heuristics only) |
+
+### Unified Global Search Engine
+* **Dynamic Search Box**: Pressing `/` opens the search input box.
+  * **Real-time typing**: As you type, the Tree Navigator dynamically filters the pre-loaded 90-day workspace sessions in memory (highly performant and real-time).
+  * **Scope Escape**: Pressing `Enter` triggers a deep database search across all-time history. The Tree Navigator is cleared and repopulated with all matching database sessions (matched on project names, commands, git messages, and AI summaries).
+* **Visual Indicator**: The Tree Navigator's root title changes to `🔍 Search Results: "<keyword>"` when a deep search is active.
+* **Escaping search**: Pressing `Escape` or clearing the search box clears the active deep search and immediately restores the original pre-loaded 90-day timeline.
 
 ### Robust Clipboard Copy System
 * **Binding**: Pressing `c` copies the selected text in the details panel to the operating system's clipboard.

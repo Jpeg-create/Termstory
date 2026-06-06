@@ -81,7 +81,6 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_commits_timestamp ON commits(timestamp DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_commits_project_id ON commits(project_id);")
         
-        
         # Add ai_summary column to sessions if not exists
         try:
             cursor.execute("ALTER TABLE sessions ADD COLUMN ai_summary TEXT;")
@@ -98,9 +97,80 @@ class Database:
             created_at INTEGER DEFAULT (strftime('%s', 'now'))
         );
         """)
+        
+        # One-time migration: clean up duplicate sessions/commands and create unique indexes
+        self._migrate_deduplicate_sessions(cursor)
             
         conn.commit()
         conn.close()
+
+    def _migrate_deduplicate_sessions(self, cursor) -> None:
+        """One-time migration: remove duplicate sessions and commands that share the same keys,
+        and create unique constraints to prevent future duplicates."""
+        # Find start_times that have duplicates
+        cursor.execute("""
+            SELECT start_time, COUNT(*) as cnt
+            FROM sessions
+            GROUP BY start_time
+            HAVING cnt > 1
+        """)
+        dup_start_times = cursor.fetchall()
+        
+        for (start_time, _count) in dup_start_times:
+            # Get all sessions with this start_time
+            cursor.execute("""
+                SELECT s.id, s.ai_summary,
+                       (SELECT COUNT(*) FROM commands WHERE session_id = s.id) as cmd_count
+                FROM sessions s
+                WHERE s.start_time = ?
+                ORDER BY cmd_count DESC, s.ai_summary IS NOT NULL DESC, s.id ASC
+            """, (start_time,))
+            rows = cursor.fetchall()
+            
+            if len(rows) <= 1:
+                continue
+                
+            # Keep the best one (most commands, or has ai_summary)
+            keeper_id = rows[0][0]
+            
+            # Reassign orphaned commands from duplicates to the keeper
+            for row in rows[1:]:
+                dup_id = row[0]
+                cursor.execute("UPDATE commands SET session_id = ? WHERE session_id = ?", (keeper_id, dup_id))
+                cursor.execute("DELETE FROM sessions WHERE id = ?", (dup_id,))
+        
+        # Deduplicate legacy commands on (timestamp, command)
+        cursor.execute("""
+            SELECT timestamp, command, COUNT(*) as cnt
+            FROM commands
+            GROUP BY timestamp, command
+            HAVING cnt > 1
+        """)
+        dup_commands = cursor.fetchall()
+        for ts, cmd_str, _cnt in dup_commands:
+            cursor.execute("""
+                SELECT id FROM commands
+                WHERE timestamp = ? AND command = ?
+                ORDER BY id ASC
+            """, (ts, cmd_str))
+            cmd_rows = cursor.fetchall()
+            if len(cmd_rows) > 1:
+                # Keep the first one, delete the rest
+                for row in cmd_rows[1:]:
+                    cursor.execute("DELETE FROM commands WHERE id = ?", (row[0],))
+        
+        # Create UNIQUE indexes
+        import sqlite3
+        try:
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_start_time_unique ON sessions(start_time);")
+        except sqlite3.IntegrityError:
+            pass  # Edge case: if migration didn't fully clean up, index creation will be retried next run
+            
+        try:
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_ts_cmd_unique ON commands(timestamp, command);")
+        except sqlite3.IntegrityError:
+            pass
+
 
 
     def save_data(self, projects: List[Project], sessions: List[Session], commands: List[Command]) -> None:
@@ -177,32 +247,39 @@ class Database:
                     cmd.project_id = project_id_map[cmd.project_id]
                     
             # --- 2. Save Sessions ---
-            cursor.execute("SELECT id, start_time, end_time, duration_seconds, project_id FROM sessions")
+            # Dedup key is start_time ONLY (stable across runs regardless of project_id changes)
+            cursor.execute("SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary FROM sessions")
             db_sessions = {}
             for row in cursor.fetchall():
-                key = (row[1], row[4])
+                key = row[1]  # start_time only
                 # If there are duplicate legacy sessions, prefer the one with the latest end_time
                 if key not in db_sessions or row[2] > db_sessions[key]["end_time"]:
-                    db_sessions[key] = {"id": row[0], "end_time": row[2], "duration": row[3]}
+                    db_sessions[key] = {"id": row[0], "end_time": row[2], "duration": row[3], "ai_summary": row[5]}
             
             session_id_map = {}
             
             for session in sessions:
                 temp_id = session.id
-                key = (session.start_time, session.project_id)
+                key = session.start_time  # start_time only
                 if key in db_sessions:
                     db_id = db_sessions[key]["id"]
-                    # Update end_time and duration as the session grows
+                    existing_summary = db_sessions[key]["ai_summary"]
+                    # Update end_time, duration, and project_id — but preserve existing ai_summary
                     cursor.execute("""
                         UPDATE sessions SET end_time = ?, duration_seconds = ?, project_id = ? WHERE id = ?
                     """, (session.end_time, session.duration_seconds, session.project_id, db_id))
                     session.id = db_id
+                    session.ai_summary = existing_summary  # preserve cached AI work
                 else:
                     cursor.execute("""
-                        INSERT INTO sessions (start_time, end_time, duration_seconds, project_id)
+                        INSERT OR IGNORE INTO sessions (start_time, end_time, duration_seconds, project_id)
                         VALUES (?, ?, ?, ?)
                     """, (session.start_time, session.end_time, session.duration_seconds, session.project_id))
                     db_id = cursor.lastrowid
+                    if db_id == 0:
+                        # INSERT OR IGNORE hit a conflict — fetch the existing row
+                        cursor.execute("SELECT id FROM sessions WHERE start_time = ?", (session.start_time,))
+                        db_id = cursor.fetchone()[0]
                     session.id = db_id
                     
                 if temp_id is not None:
@@ -378,6 +455,80 @@ class Database:
         finally:
             conn.close()
         return projects
+
+    def get_sessions_by_ids(self, session_ids: List[int]) -> List[Session]:
+        """Retrieve Session entities (with commands and commits) for a given list of IDs"""
+        if not session_ids:
+            return []
+            
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            placeholders = ",".join("?" for _ in session_ids)
+            cursor.execute(f"""
+                SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
+                FROM sessions
+                WHERE id IN ({placeholders})
+                ORDER BY start_time ASC
+            """, session_ids)
+            session_rows = cursor.fetchall()
+            
+            sessions = []
+            for row in session_rows:
+                s_id, start, end, duration, p_id, ai_sum = row
+                
+                # Fetch commands
+                cursor.execute("""
+                    SELECT id, timestamp, command, exit_code, session_id, project_id
+                    FROM commands
+                    WHERE session_id = ?
+                    ORDER BY timestamp ASC
+                """, (s_id,))
+                cmd_rows = cursor.fetchall()
+                
+                commands = []
+                for c_row in cmd_rows:
+                    c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
+                    commands.append(Command(
+                        id=c_id,
+                        timestamp=timestamp,
+                        command=command_text,
+                        exit_code=exit_code,
+                        session_id=s_id,
+                        project_id=cmd_p_id
+                    ))
+                    
+                # Fetch commits (with buffers)
+                commits = []
+                if p_id is not None:
+                    cursor.execute("""
+                        SELECT hash, timestamp, message, cleaned_message
+                        FROM commits
+                        WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
+                        ORDER BY timestamp ASC
+                    """, (p_id, start - 300, end + 600))
+                    for c_row in cursor.fetchall():
+                        commits.append({
+                            "hash": c_row[0],
+                            "timestamp": c_row[1],
+                            "message": c_row[2],
+                            "cleaned_message": c_row[3]
+                        })
+                        
+                sessions.append(Session(
+                    id=s_id,
+                    start_time=start,
+                    end_time=end,
+                    duration_seconds=duration,
+                    project_id=p_id,
+                    commands=commands,
+                    commits=commits,
+                    ai_summary=ai_sum
+                ))
+        finally:
+            conn.close()
+        return sessions
 
     def get_range_sessions(self, start_ts: int, end_ts: int) -> List[Session]:
         """Get sessions starting in the given Unix timestamp range"""
@@ -707,7 +858,7 @@ class Database:
             query_val = f"%{query}%"
             
             sql = """
-                SELECT DISTINCT s.id, s.start_time, s.end_time, s.duration_seconds, s.project_id, p.name, p.path
+                SELECT DISTINCT s.id, s.start_time, s.end_time, s.duration_seconds, s.project_id, p.name, p.path, s.ai_summary
                 FROM sessions s
                 LEFT JOIN projects p ON s.project_id = p.id
                 LEFT JOIN commands c ON s.id = c.session_id
@@ -719,9 +870,10 @@ class Database:
                     OR c.command LIKE ?
                     OR co.message LIKE ?
                     OR co.cleaned_message LIKE ?
+                    OR s.ai_summary LIKE ?
                 )
             """
-            params = [query_val, query_val, query_val, query_val]
+            params = [query_val, query_val, query_val, query_val, query_val]
             
             if project_filter:
                 sql += " AND p.name LIKE ?"
@@ -738,7 +890,7 @@ class Database:
             
             results = []
             for row in rows:
-                s_id, start_time, end_time, duration, p_id, p_name, p_path = row
+                s_id, start_time, end_time, duration, p_id, p_name, p_path, ai_sum = row
                 
                 # Fetch all commands in this session
                 cursor.execute("""
@@ -782,6 +934,7 @@ class Database:
                     "project_id": p_id,
                     "project_name": p_name or "General / No Project",
                     "project_path": p_path or "",
+                    "ai_summary": ai_sum,
                     "all_commands": all_cmds,
                     "matching_commands": matching_cmds,
                     "all_commits": all_commits,

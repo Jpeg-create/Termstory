@@ -146,10 +146,69 @@ def find_project_root(path: str) -> str:
     if len(parts) >= 2 and parts[0].lower() in {"projects", "workspace", "workspace_py", "repos", "git", "code", "dev", "development"}:
         return os.path.join(home, parts[0], parts[1])
         
-    return abs_path
+    return home
+
+def _is_project_indicative_command(cmd_str: str) -> bool:
+    """Check if a command strongly implies the user is inside a project directory."""
+    cmd = cmd_str.strip()
+    # Git write operations (read-only like `git status` are less indicative)
+    git_write_cmds = {"git commit", "git push", "git pull", "git merge", "git rebase",
+                      "git checkout", "git switch", "git stash", "git add", "git diff",
+                      "git branch", "git cherry-pick", "git reset", "git tag", "git fetch"}
+    for gc in git_write_cmds:
+        if cmd.startswith(gc):
+            return True
+    # Build/run commands that only make sense inside a project
+    project_cmds = ["npm ", "npx ", "yarn ", "pnpm ", "cargo ", "make", "gradle ",
+                    "mvn ", "python manage.py", "python setup.py", "pip install -e",
+                    "docker-compose ", "docker compose ", "pytest", "python -m pytest",
+                    "python3 -m pytest", "go build", "go run", "go test", "flutter ",
+                    "rails ", "bundle ", "mix ", "dotnet "]
+    for pc in project_cmds:
+        if cmd.startswith(pc) or cmd == pc.strip():
+            return True
+    return False
+
+
+def _extract_file_args(cmd_str: str) -> List[str]:
+    """Extract potential file path arguments from a command."""
+    try:
+        tokens = shlex.split(cmd_str)
+    except Exception:
+        tokens = cmd_str.strip().split()
+    
+    if not tokens:
+        return []
+    
+    # Skip the command itself and any flags
+    file_args = []
+    for token in tokens[1:]:
+        if token.startswith("-"):
+            continue
+        # Look for things that look like file paths (have extensions or path separators)
+        if "/" in token or "." in token:
+            # Skip URLs, environment variables, and obviously non-file things
+            if token.startswith("http") or token.startswith("$") or "=" in token:
+                continue
+            file_args.append(token)
+    return file_args
+
+
+def _assign_project_to_session(session, project, projects_dict) -> None:
+    """Helper to link a session and its commands to a project."""
+    session.project_id = project.id
+    for cmd in session.commands:
+        cmd.project_id = project.id
+
 
 def detect_projects(sessions: List[Session]) -> List[Project]:
-    """Detect projects from cd commands in sessions, humanize names, and update links in sessions/commands"""
+    """Detect projects from cd commands in sessions, humanize names, and update links in sessions/commands.
+    
+    Uses a 3-pass approach:
+      Pass 1: Track cd commands to maintain simulated CWD (existing logic)
+      Pass 2: Command-based inference — git/build commands + file path matching for 'Other' sessions
+      Pass 3: Neighbor propagation — assign 'Other' sessions based on adjacent session context
+    """
     projects_dict = {}
     project_id_counter = 1
     
@@ -160,8 +219,11 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
     cwd = os.path.expanduser("~")
     home = os.path.abspath(os.path.expanduser("~"))
     
+    # ── Pass 1: cd-tracking (existing logic) ──────────────────────────
+    last_session_end = None
     for session in sorted_sessions:
-        has_cd = False
+        if last_session_end is not None and session.start_time - last_session_end > 7200:
+            cwd = home
         
         for cmd in session.commands:
             cmd_stripped = cmd.command.strip()
@@ -169,7 +231,6 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
             if cmd_stripped == "cd" or cmd_stripped.startswith("cd ") or cmd_stripped.startswith("cd\t"):
                 path = extract_cd_path(cmd.command)
                 if path:
-                    has_cd = True
                     # Resolve path
                     resolved = None
                     if path.startswith("/") or path.startswith("~"):
@@ -234,12 +295,135 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
                 project.total_time += session.duration_seconds
                 
             # Link session and commands to project
-            session.project_id = project.id
-            for cmd in session.commands:
-                cmd.project_id = project.id
+            _assign_project_to_session(session, project, projects_dict)
         else:
             session.project_id = None
             for cmd in session.commands:
                 cmd.project_id = None
+        
+        last_session_end = session.end_time
+    
+    # ── Pass 2: Command-based inference for "Other" sessions ──────────
+    # Build a reverse lookup: abs_path -> project for known projects
+    known_project_paths = {}  # abs_path -> Project
+    for abs_root, project in projects_dict.items():
+        known_project_paths[abs_root] = project
+    
+    if known_project_paths:
+        for session in sorted_sessions:
+            if session.project_id is not None:
+                continue  # already assigned
+            
+            has_indicative_cmds = any(
+                _is_project_indicative_command(cmd.command) for cmd in session.commands
+            )
+            
+            if not has_indicative_cmds:
+                continue
+            
+            # Strategy A: Check file path arguments against known project roots
+            best_match = None
+            best_score = 0
+            
+            for cmd in session.commands:
+                file_args = _extract_file_args(cmd.command)
+                for farg in file_args:
+                    for abs_root, project in known_project_paths.items():
+                        # Check if the file exists relative to a known project root
+                        candidate = os.path.join(abs_root, farg)
+                        if os.path.exists(candidate):
+                            # Score by specificity (deeper paths = better match)
+                            score = len(farg.split("/"))
+                            if score > best_score:
+                                best_score = score
+                                best_match = project
+            
+            if best_match:
+                _assign_project_to_session(session, best_match, projects_dict)
+                best_match.session_count += 1
+                best_match.total_time += session.duration_seconds
+                continue
+            
+            # Strategy B: If session has git commands, try to find which known project
+            # had activity closest in time (within 1 hour before/after)
+            if any(cmd.command.strip().startswith("git ") for cmd in session.commands):
+                closest_project = None
+                closest_gap = float("inf")
                 
+                for other_session in sorted_sessions:
+                    if other_session.project_id is None or other_session is session:
+                        continue
+                    gap = min(
+                        abs(session.start_time - other_session.end_time),
+                        abs(other_session.start_time - session.end_time)
+                    )
+                    if gap < closest_gap and gap < 3600:  # within 1 hour
+                        closest_gap = gap
+                        closest_project_id = other_session.project_id
+                        # Find the project object
+                        for proj in projects_dict.values():
+                            if proj.id == closest_project_id:
+                                closest_project = proj
+                                break
+                
+                if closest_project:
+                    _assign_project_to_session(session, closest_project, projects_dict)
+                    closest_project.session_count += 1
+                    closest_project.total_time += session.duration_seconds
+
+    # ── Pass 3: Neighbor propagation for remaining "Other" sessions ───
+    # If an "Other" session is sandwiched between two sessions of the same project,
+    # or immediately follows a known project session (within 2 hours), assign it.
+    PROPAGATION_GAP_THRESHOLD = 7200  # 2 hours in seconds
+    
+    for i, session in enumerate(sorted_sessions):
+        if session.project_id is not None:
+            continue  # already assigned
+        
+        prev_project_id = None
+        next_project_id = None
+        prev_gap = float("inf")
+        next_gap = float("inf")
+        prev_project = None
+        next_project = None
+        
+        # Look backward for the nearest assigned session
+        for j in range(i - 1, -1, -1):
+            if sorted_sessions[j].project_id is not None:
+                prev_project_id = sorted_sessions[j].project_id
+                prev_gap = session.start_time - sorted_sessions[j].end_time
+                for proj in projects_dict.values():
+                    if proj.id == prev_project_id:
+                        prev_project = proj
+                        break
+                break
+        
+        # Look forward for the nearest assigned session
+        for j in range(i + 1, len(sorted_sessions)):
+            if sorted_sessions[j].project_id is not None:
+                next_project_id = sorted_sessions[j].project_id
+                next_gap = sorted_sessions[j].start_time - session.end_time
+                for proj in projects_dict.values():
+                    if proj.id == next_project_id:
+                        next_project = proj
+                        break
+                break
+        
+        # Sandwich: same project on both sides, both within threshold
+        if (prev_project_id is not None and next_project_id is not None
+                and prev_project_id == next_project_id
+                and prev_gap < PROPAGATION_GAP_THRESHOLD
+                and next_gap < PROPAGATION_GAP_THRESHOLD):
+            _assign_project_to_session(session, prev_project, projects_dict)
+            prev_project.session_count += 1
+            prev_project.total_time += session.duration_seconds
+            continue
+        
+        # Follow: immediately after a known session, within threshold
+        if prev_project_id is not None and prev_gap < PROPAGATION_GAP_THRESHOLD:
+            _assign_project_to_session(session, prev_project, projects_dict)
+            prev_project.session_count += 1
+            prev_project.total_time += session.duration_seconds
+            continue
+    
     return list(projects_dict.values())
