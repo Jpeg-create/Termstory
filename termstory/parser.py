@@ -13,57 +13,122 @@ def clean_command(cmd_str: str) -> Optional[str]:
     return cleaned
 
 def parse_zsh_history(filepath: str) -> List[Command]:
-    """Parse a Zsh history file containing ': <timestamp>:<duration>;<command>' format"""
+    """Parse a Zsh history file containing ': <timestamp>:<duration>;<command>' format.
+    Falls back to Legacy Fallback Mode (mtime spacing) if extended history prefix is absent.
+    """
     commands = []
     if not os.path.exists(filepath):
         return commands
 
-    # Match ': 1748851200:0;git status' style lines
-    pattern = re.compile(r'^:\s*(\d+):(\d+);(.*)$')
-    
-    current_timestamp = None
-    current_duration = None
-    current_command_parts = []
-    
-    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-        for line in f:
-            match = pattern.match(line)
-            if match:
-                # Save previous command if we have one pending
-                if current_timestamp is not None:
-                    cmd_str = "".join(current_command_parts)
-                    cmd_cleaned = clean_command(cmd_str)
-                    if cmd_cleaned:
-                        commands.append(Command(
-                            timestamp=current_timestamp,
-                            command=cmd_cleaned,
-                            exit_code=0,
-                            duration=current_duration
-                        ))
+    # Detect if extended history timestamps exist in the file at all.
+    # If not, switch to Zsh Legacy Fallback Mode.
+    has_extended = False
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                if line.startswith(':'):
+                    has_extended = True
+                    break
+    except Exception:
+        pass
+
+    if not has_extended:
+        # Zsh Legacy Fallback Mode:
+        # Establish the OS Anchor using file modification time (mtime)
+        try:
+            anchor_time = int(os.path.getmtime(filepath))
+        except Exception:
+            anchor_time = int(datetime.now().timestamp())
+
+        raw_lines = []
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    raw_lines.append(line)
+        except Exception:
+            return commands
+
+        temp_commands = []
+        i = 0
+        while i < len(raw_lines):
+            line = raw_lines[i]
+            line_stripped = line.strip()
+            if not line_stripped:
+                i += 1
+                continue
                 
-                # Start new command parsing
-                current_timestamp = int(match.group(1))
-                current_duration = int(match.group(2))
-                current_command_parts = [match.group(3)]
-            else:
-                # Continuation of multiline command if the previous line ended with a backslash
-                if current_timestamp is not None:
-                    if current_command_parts and current_command_parts[-1].rstrip().endswith('\\'):
-                        # Strip trailing backslash and ensure a space separates the parts
-                        current_command_parts[-1] = current_command_parts[-1].rstrip()[:-1] + " "
-                        current_command_parts.append(line)
-                    
-        # Save last command
-        if current_timestamp is not None:
-            cmd_str = "".join(current_command_parts)
+            cmd_lines = [line]
+            i += 1
+            while i < len(raw_lines):
+                if cmd_lines and not cmd_lines[-1].rstrip().endswith('\\'):
+                    break
+                next_line = raw_lines[i]
+                cmd_lines.append(next_line)
+                i += 1
+                
+            cmd_str = "".join(cmd_lines)
             cmd_cleaned = clean_command(cmd_str)
             if cmd_cleaned:
-                commands.append(Command(
-                    timestamp=current_timestamp,
-                    command=cmd_cleaned,
-                    exit_code=0,
-                    duration=current_duration
-                ))
+                temp_commands.append(cmd_cleaned)
+
+        # 1-Second Step-Back Algorithm:
+        # Assign the last command anchor_time, and step backward by 1 second for preceding ones
+        n = len(temp_commands)
+        for idx, cmd in enumerate(temp_commands):
+            commands.append(Command(
+                timestamp=anchor_time + (idx - n + 1),
+                command=cmd,
+                exit_code=0,
+                duration=0
+            ))
+    else:
+        # Standard Zsh Parser
+        # Match ': 1748851200:0;git status' style lines
+        pattern = re.compile(r'^:\s*(\d+):(\d+);(.*)$')
+        
+        current_timestamp = None
+        current_duration = None
+        current_command_parts = []
+        
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                match = pattern.match(line)
+                if match:
+                    # Save previous command if we have one pending
+                    if current_timestamp is not None:
+                        cmd_str = "".join(current_command_parts)
+                        cmd_cleaned = clean_command(cmd_str)
+                        if cmd_cleaned:
+                            commands.append(Command(
+                                timestamp=current_timestamp,
+                                command=cmd_cleaned,
+                                exit_code=0,
+                                duration=current_duration
+                            ))
+                    
+                    # Start new command parsing
+                    current_timestamp = int(match.group(1))
+                    current_duration = int(match.group(2))
+                    current_command_parts = [match.group(3)]
+                else:
+                    # Continuation of multiline command if the previous line ended with a backslash
+                    if current_timestamp is not None:
+                        if current_command_parts and current_command_parts[-1].rstrip().endswith('\\'):
+                            # Strip trailing backslash and ensure a space separates the parts
+                            current_command_parts[-1] = current_command_parts[-1].rstrip()[:-1] + " "
+                            current_command_parts.append(line)
+                        
+            # Save last command
+            if current_timestamp is not None:
+                cmd_str = "".join(current_command_parts)
+                cmd_cleaned = clean_command(cmd_str)
+                if cmd_cleaned:
+                    commands.append(Command(
+                        timestamp=current_timestamp,
+                        command=cmd_cleaned,
+                        exit_code=0,
+                        duration=current_duration
+                    ))
 
     # Filtering logic
     now = int(datetime.now().timestamp())

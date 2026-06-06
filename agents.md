@@ -19,7 +19,7 @@ TermStory is **not** a tracking tool, productivity auditor, or a generic manager
 
 ### A. Parser Engine ([parser.py](file:///Users/himanshuverma/Projects/termstory/termstory/parser.py))
 Parses shell histories safely to extract Unix timestamps and clean command strings.
-* **Zsh Parser**: Extracts Zsh logs written in the extended history format: `: <timestamp>:<duration>;<command>`. Handles multiline commands marked with a trailing backslash `\`.
+* **Zsh Parser**: Extracts Zsh logs written in the extended history format: `: <timestamp>:<duration>;<command>`. Handles multiline commands marked with a trailing backslash `\`. Switches to **Legacy Fallback Mode** (spacing command timestamps backward 1 second at a time from the file modification time `mtime`) if extended history format is disabled/absent.
 * **Bash Parser**: Reads standard `.bash_history`. If `#<timestamp>` rows exist, it associates commands with their timestamps. If timestamps are missing, it spaces them backward and forward in 10-second intervals based on the file modification time (`mtime`).
 * **Filtering Limits**: Filters out commands older than 5 years or with future timestamps to avoid database pollution.
 

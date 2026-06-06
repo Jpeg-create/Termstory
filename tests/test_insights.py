@@ -9,7 +9,8 @@ from termstory.insights import (
 )
 
 def test_insights_calculations():
-    now = int(time.time())
+    # Use a fixed noon epoch timestamp to ensure adding 2 hours doesn't cross midnight in any timezone
+    now = 1748870400
     
     # Create projects
     p1 = Project(id=1, name="Project Alpha", path="~/alpha", first_seen=0, last_seen=0, session_count=1, total_time=1)

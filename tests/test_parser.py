@@ -76,3 +76,25 @@ def test_parse_bash_history_without_timestamps(tmp_path):
     assert commands[0].command == "git status"
     assert commands[1].timestamp == 1748851210
     assert commands[1].command == "docker ps"
+
+def test_parse_zsh_history_legacy_fallback(tmp_path):
+    temp_file = tmp_path / "zsh_legacy_test"
+    temp_file.write_text(
+        "git status\n"
+        "docker ps\n"
+    )
+    
+    # Set the file's modification time to a known value
+    known_mtime = 1748851220
+    os.utime(str(temp_file), (known_mtime, known_mtime))
+    
+    commands = parse_zsh_history(str(temp_file))
+    assert len(commands) == 2
+    
+    # 1-Second Step-Back:
+    # last command gets known_mtime (1748851220)
+    # preceding command gets known_mtime - 1 (1748851219)
+    assert commands[0].timestamp == 1748851219
+    assert commands[0].command == "git status"
+    assert commands[1].timestamp == 1748851220
+    assert commands[1].command == "docker ps"
