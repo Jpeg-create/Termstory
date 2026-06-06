@@ -125,6 +125,12 @@ Zsh records commands in the format:
 ```
 * **Regex Extraction**: `^:\s*(\d+):(\d+);(.*)$` isolates the timestamp, elapsed duration, and command text.
 * **Multiline Support**: If a command ends with `\`, the parser continues appending lines until the backslash pattern is broken, ensuring complete code blocks (such as complex Docker configurations or make scripts) are captured.
+* **Legacy Fallback Mode**: If extended history is disabled and no timestamp prefixes exist, the parser automatically falls back to spacing command timestamps backward 1 second at a time from the file modification time (`mtime`).
+* **Hybrid / Frankenstein Mode**: If a user recently enabled `EXTENDED_HISTORY`, their file contains a mix of legacy (timestamp-less) and timestamped commands. The parser evaluates lines individually, finding the first valid timestamped line to partition the file:
+  - Commands prior to the first timestamped line are legacy.
+  - The anchor time is set to 1 minute prior to the oldest valid timestamped command.
+  - Any malformed lines or lines starting with `:` in timestamped regions are skipped.
+* **Timestamp Locking**: To prevent synthetic legacy timestamps from shifting on subsequent runs when `mtime` changes, the parser queries the database on ingestion to retrieve a map of command strings to stored timestamps. It then sequentially locks in and reuses these timestamps for matching commands.
 
 ### Bash History Format
 Standard Bash histories only write raw command strings sequentially. If `HISTTIMEFORMAT` is configured, Bash writes timestamp headers beforehand:

@@ -849,6 +849,21 @@ class Database:
             conn.close()
         return commits
 
+    def get_all_commands_lookup(self) -> Dict[str, List[int]]:
+        """Return a mapping of command string to list of its stored timestamps (sorted)"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT command, timestamp FROM commands ORDER BY timestamp ASC")
+            lookup = {}
+            for cmd, ts in cursor.fetchall():
+                if cmd not in lookup:
+                    lookup[cmd] = []
+                lookup[cmd].append(ts)
+            return lookup
+        finally:
+            conn.close()
+
     def search_sessions(self, query: str, project_filter: Optional[str] = None, since_ts: Optional[int] = None) -> List[Dict]:
         """Query sessions containing matching commands, matching project names, or matching commits"""
         conn = self.get_connection()

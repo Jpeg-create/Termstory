@@ -2,12 +2,14 @@ import time
 from termstory.database import Database
 from termstory.models import Project, Session, Command
 
-def test_database_commits_and_search(tmp_path):
+def test_database_commits_and_search(tmp_path, monkeypatch):
+    monkeypatch.setenv("TERMSTORY_DATE_OVERRIDE", "2026-06-06 12:00:00")
     db_file = tmp_path / "test_search.db"
     db = Database(str(db_file))
     db.init_db()
     
-    now = int(time.time())
+    from datetime import datetime
+    now = int(datetime(2026, 6, 6, 12, 0, 0).timestamp())
     
     # 1. Save projects
     p1 = Project(id=1, name="Apache HugeGraph", path="~/projects/incubator-hugegraph", first_seen=now, last_seen=now, session_count=1, total_time=100)

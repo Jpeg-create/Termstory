@@ -98,3 +98,50 @@ def test_parse_zsh_history_legacy_fallback(tmp_path):
     assert commands[0].command == "git status"
     assert commands[1].timestamp == 1748851220
     assert commands[1].command == "docker ps"
+
+def test_parse_zsh_history_hybrid_mode(tmp_path):
+    temp_file = tmp_path / "zsh_hybrid_test"
+    temp_file.write_text(
+        "git pull\n"
+        "git status\n"
+        ": 1748851200:0;git commit -m 'feat'\n"
+        "malformed line to ignore\n"
+        ": 1748851210:0;git push\n"
+        ": invalid:0;ignored too\n"
+    )
+    
+    commands = parse_zsh_history(str(temp_file))
+    assert len(commands) == 4
+    
+    assert commands[0].command == "git pull"
+    assert commands[0].timestamp == 1748851139
+    
+    assert commands[1].command == "git status"
+    assert commands[1].timestamp == 1748851140
+    
+    assert commands[2].command == "git commit -m 'feat'"
+    assert commands[2].timestamp == 1748851200
+    
+    assert commands[3].command == "git push"
+    assert commands[3].timestamp == 1748851210
+
+def test_parse_zsh_history_locking(tmp_path):
+    temp_file = tmp_path / "zsh_locking_test"
+    temp_file.write_text(
+        "git status\n"
+        ": 1748851200:0;git commit\n"
+    )
+    
+    existing_lookup = {
+        "git status": [1748850000],
+        "git commit": [1748851200]
+    }
+    
+    commands = parse_zsh_history(str(temp_file), existing_lookup=existing_lookup)
+    assert len(commands) == 2
+    
+    assert commands[0].command == "git status"
+    assert commands[0].timestamp == 1748850000
+    
+    assert commands[1].command == "git commit"
+    assert commands[1].timestamp == 1748851200

@@ -57,7 +57,7 @@ def run_ingestion(db: Database) -> None:
         )
         return
         
-    commands = parse_all_histories(history_files)
+    commands = parse_all_histories(history_files, db=db)
     if len(commands) == 0:
         Console(stderr=True).print(
             "\n[bold yellow]⚠️  Warning: Shell history parser returned 0 commands.[/bold yellow]\n"
