@@ -20,8 +20,9 @@ def parse_zsh_history(filepath: str) -> List[Command]:
     if not os.path.exists(filepath):
         return commands
 
-    # Detect if extended history timestamps exist in the file at all.
-    # If not, switch to Zsh Legacy Fallback Mode.
+    # Detect if Zsh extended history timestamps (: timestamp:duration;) are present.
+    # If absent (disabled in ~/.zshrc), switch to Legacy Fallback Mode to prevent
+    # returning 0 parsed commands, and set the environment flag for CLI onboarding prompts.
     has_extended = False
     try:
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
@@ -73,7 +74,10 @@ def parse_zsh_history(filepath: str) -> List[Command]:
                 temp_commands.append(cmd_cleaned)
 
         # 1-Second Step-Back Algorithm:
-        # Assign the last command anchor_time, and step backward by 1 second for preceding ones
+        # Assign the last parsed command the anchor_time (file mtime), and step
+        # backward by 1 second for each preceding command. This preserves strict
+        # chronological order for sessions without breaking the session builder
+        # grouping logic (which requires < 30 minutes of idle time to group commands).
         n = len(temp_commands)
         for idx, cmd in enumerate(temp_commands):
             commands.append(Command(

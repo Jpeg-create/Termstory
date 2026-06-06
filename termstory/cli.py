@@ -140,7 +140,10 @@ def show_ui(
     
     run_ingestion(db)
     
-    # Check if Zsh missing timestamps was flagged (Zsh Legacy Fallback Mode)
+    # White-Glove Onboarding Prompt:
+    # If the parser flags that Zsh history timestamps are missing, pause the standard
+    # boot sequence to offer automatic configuration injection (setopt EXTENDED_HISTORY)
+    # into the user's ~/.zshrc file. Never perform this without explicit user consent ('Y').
     if os.environ.get("TERMSTORY_MISSING_TIMESTAMPS") == "1":
         console.print("\n[bold yellow]⚠️  TermStory needs your shell to record timestamps to build your timeline accurately.[/bold yellow]")
         try:
