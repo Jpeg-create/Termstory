@@ -22,12 +22,14 @@ This module solves that by running a multi-phase forensic pipeline:
     1. Git Commit Matcher  — extracts the commit message from `git commit -m "…"`
        commands, runs `git log --all` on the CWD-derived repo, and fuzzy-matches the
        message to find the real commit timestamp.  Uses SequenceMatcher ratio ≥ 0.85.
-    2. File Stat           — for commands that create a new file/directory
+    2. Inline Date Strings — extracts embedded date strings from git commit --date,
+       tar/mysqldump output filenames, and mv rename patterns.
+    3. File Stat           — for commands that create a new file/directory
        (touch, mkdir, git init, npm init, venv, cargo init, go mod init, echo >, …),
        stats the resulting path using st_birthtime (macOS) or st_mtime.
-    3. Package Manager     — checks Homebrew Cellar, pip dist-info, npm lock files,
+    4. Package Manager     — checks Homebrew Cellar, pip dist-info, npm lock files,
        Cargo registry, and RubyGems install directories for the artifact's mtime.
-    4. Docker Image        — runs `docker image inspect <tag> --format={{.Created}}`
+    5. Docker Image        — runs `docker image inspect <tag> --format={{.Created}}`
        for `docker build -t <tag>` commands.
     5. Venv / Lockfiles    — stats Gemfile.lock, go.sum, composer.lock, poetry.lock,
        mix.lock, and venv/bin/activate for the corresponding installer commands.
@@ -444,6 +446,85 @@ class TimestampDetective:
                         best_source = f"git log: {repo_name}@{commit['hash'][:7]}"
 
         return (best_ts, best_source) if best_ts is not None else None
+
+
+
+    def _parse_date_string(self, date_str: str) -> Optional[int]:
+        from datetime import datetime, timezone
+        formats = [
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%SZ",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%d",
+            "%Y_%m_%d",
+            "%a, %d %b %Y %H:%M:%S %z",
+            "%a %b %d %H:%M:%S %Y %z"
+        ]
+        for fmt in formats:
+            try:
+                dt = datetime.strptime(date_str, fmt)
+                if dt.tzinfo is None:
+                    # Assume local time if no tz provided
+                    dt = dt.replace(tzinfo=timezone.utc).astimezone()
+                ts = int(dt.timestamp())
+                if self._is_valid_timestamp(ts):
+                    return ts
+            except ValueError:
+                continue
+        return None
+
+    def detect_inline_date(self, command: str, virtual_cwd: str) -> Optional[Tuple[int, str]]:
+        """
+        Detector 7 — Inline Date Strings 🟢 High/Medium confidence.
+
+        Extracts dates from command strings where the date represents "when this was executed".
+        Avoids querying/searching arguments (like --since, --newer).
+        """
+        import re
+
+        # Explicit exclusions
+        exclude_patterns = [
+            r'--since[= ]', r'--until[= ]', r'--after[= ]', r'--before[= ]',
+            r'-newer\b', r'\bgrep\b', r'\bcat\b', r'\bless\b', r'\bhead\b', r'\btail\b',
+            r'\btouch\s+-t\b'
+        ]
+        for ep in exclude_patterns:
+            if re.search(ep, command):
+                return None
+
+        # 1. git commit --date="..."
+        m1 = re.search(r'git\s+commit\b.*?--date[= ](?:(["\'])(.*?)\1|([^\s\'"]+))', command)
+        if m1:
+            date_str = m1.group(2) or m1.group(3)
+            ts = self._parse_date_string(date_str)
+            if ts: return (ts, f"inline date: {date_str}")
+
+        # 2. GIT_COMMITTER_DATE="..." git commit
+        m2 = re.search(r'GIT_(?:COMMITTER|AUTHOR)_DATE=(?:(["\'])(.*?)\1|([^\s\'"]+))', command)
+        if m2:
+            date_str = m2.group(2) or m2.group(3)
+            ts = self._parse_date_string(date_str)
+            if ts: return (ts, f"inline date: {date_str}")
+
+        # 3. tar create with date in name
+        m3 = re.search(r'^tar\s+.*?-[a-zA-Z]*[cC][a-zA-Z]*\s+.*?(\d{4}[-_]\d{2}[-_]\d{2})', command)
+        if m3:
+            ts = self._parse_date_string(m3.group(1))
+            if ts: return (ts, f"inline date in filename: {m3.group(1)}")
+
+        # 4. mysqldump / pg_dump with date in name
+        m4 = re.search(r'(?:mysqldump|pg_dump)\b.*>\s*\S*(\d{4}[-_]\d{2}[-_]\d{2})', command)
+        if m4:
+            ts = self._parse_date_string(m4.group(1))
+            if ts: return (ts, f"inline date in filename: {m4.group(1)}")
+
+        # 5. mv rename to date
+        m5 = re.search(r'^mv\s+\S+\s+\S*(\d{4}[-_]\d{2}[-_]\d{2})', command)
+        if m5:
+            ts = self._parse_date_string(m5.group(1))
+            if ts: return (ts, f"inline date in filename: {m5.group(1)}")
+
+        return None
 
     def detect_file_stat(
         self, command: str, virtual_cwd: str
@@ -994,17 +1075,19 @@ class TimestampDetective:
 
         Priority order (highest confidence first):
           1. Git commit matcher  — exact message fuzzy-match against git history
-          2. File stat           — filesystem birthtime/mtime of created artifact
-          3. Package manager     — install artifact mtime (brew/pip/npm/cargo/gem)
-          4. Docker image        — docker image inspect timestamp
-          5. Venv / lockfiles    — lockfile/sentinel mtime
-          6. macOS system log    — brew log / last login anchors
+          2. Inline date strings — parses embedded dates like --date=YYYY-MM-DD
+          3. File stat           — filesystem birthtime/mtime of created artifact
+          4. Package manager     — install artifact mtime (brew/pip/npm/cargo/gem)
+          5. Docker image        — docker image inspect timestamp
+          6. Venv / lockfiles    — lockfile/sentinel mtime
+          7. macOS system log    — brew log / last login anchors
 
         Each detector is wrapped in a try/except so a single buggy detector
         cannot crash the entire pipeline.
         """
         detectors = [
             self.detect_git_commit,
+            self.detect_inline_date,
             self.detect_file_stat,
             self.detect_package_manager,
             self.detect_docker,

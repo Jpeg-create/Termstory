@@ -265,6 +265,74 @@ class TestDetectGitCommit(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# C2. Inline Date Strings
+# ---------------------------------------------------------------------------
+
+class TestDetectInlineDate(unittest.TestCase):
+
+    def setUp(self):
+        self.d = make_detective(search_root=tempfile.gettempdir())
+
+    def test_git_commit_date_flag_iso(self):
+        result = self.d.detect_inline_date('git commit --date="2024-01-15T10:30:00"', "/tmp")
+        self.assertIsNotNone(result)
+        ts, label = result
+        self.assertIn("2024-01-15T10:30:00", label)
+        import datetime
+        dt = datetime.datetime.strptime("2024-01-15T10:30:00", "%Y-%m-%dT%H:%M:%S")
+        dt = dt.replace(tzinfo=datetime.timezone.utc).astimezone()
+        self.assertEqual(ts, int(dt.timestamp()))
+
+    def test_git_commit_amend_date_flag_git_format(self):
+        result = self.d.detect_inline_date('git commit --amend --date="Mon Jan 15 10:30:00 2024 +0000"', "/tmp")
+        self.assertIsNotNone(result)
+        ts, label = result
+        import datetime
+        dt = datetime.datetime.strptime("Mon Jan 15 10:30:00 2024 +0000", "%a %b %d %H:%M:%S %Y %z")
+        self.assertEqual(ts, int(dt.timestamp()))
+
+    def test_git_committer_date_env_var(self):
+        result = self.d.detect_inline_date('GIT_COMMITTER_DATE="2024-01-15T10:30:00" git commit -m "fix"', "/tmp")
+        self.assertIsNotNone(result)
+
+    def test_tar_create_with_date(self):
+        result = self.d.detect_inline_date("tar -czf backup_2024-01-15.tar.gz src/", "/tmp")
+        self.assertIsNotNone(result)
+
+    def test_mysqldump_with_date(self):
+        result = self.d.detect_inline_date("mysqldump mydb > dump_2024-01-15.sql", "/tmp")
+        self.assertIsNotNone(result)
+
+    def test_mv_with_date(self):
+        result = self.d.detect_inline_date("mv report.pdf report_2024-01-15.pdf", "/tmp")
+        self.assertIsNotNone(result)
+
+    def test_git_log_since_returns_none(self):
+        result = self.d.detect_inline_date('git log --since="2024-01-01"', "/tmp")
+        self.assertIsNone(result)
+
+    def test_git_log_until_returns_none(self):
+        result = self.d.detect_inline_date('git log --until="2024-01-01"', "/tmp")
+        self.assertIsNone(result)
+
+    def test_grep_date_returns_none(self):
+        result = self.d.detect_inline_date('grep "2024-01-15" logfile.txt', "/tmp")
+        self.assertIsNone(result)
+
+    def test_cat_date_file_returns_none(self):
+        result = self.d.detect_inline_date('cat file_2024-01-15.txt', "/tmp")
+        self.assertIsNone(result)
+
+    def test_invalid_date_returns_none(self):
+        result = self.d.detect_inline_date('git commit --date="not-a-date"', "/tmp")
+        self.assertIsNone(result)
+
+    def test_too_old_timestamp_filtered(self):
+        result = self.d.detect_inline_date('git commit --date="1990-01-01T10:00:00"', "/tmp")
+        self.assertIsNone(result)
+
+
+# ---------------------------------------------------------------------------
 # D. File Stat Detector
 # ---------------------------------------------------------------------------
 
