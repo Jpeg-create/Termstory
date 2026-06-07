@@ -8,20 +8,12 @@ from termstory.ai import (
     clear_last_ai_error
 )
 
-class MockHTTPResponse:
-    def __init__(self, data, status_code=200):
-        self.data = data
-        self.code = status_code
-        self.reason = "Mocked Reason"
-        
-    def read(self):
-        return self.data
-        
-    def __enter__(self):
-        return self
-        
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
+import pytest
+
+@pytest.fixture(autouse=True)
+def mock_config_path(tmp_path, monkeypatch):
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr("termstory.config.get_config_path", lambda: str(config_file))
 
 def test_get_and_clear_error():
     clear_last_ai_error()

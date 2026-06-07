@@ -76,18 +76,30 @@ def _send_llm_request(
             return result
     except urllib.error.HTTPError as e:
         try:
-            error_body = e.read().decode("utf-8")
+            raw_body = e.read().decode("utf-8").strip()
             try:
-                err_json = json.loads(error_body)
+                err_json = json.loads(raw_body)
                 msg = err_json.get("error", {}).get("message")
                 if msg:
-                    _last_ai_error = f"HTTP Error {e.code}: {msg}"
+                    msg_str = str(msg).strip()
+                    if len(msg_str) > 200:
+                        msg_str = msg_str[:200] + "..."
+                    _last_ai_error = f"HTTP Error {e.code}: {msg_str}"
                 else:
-                    _last_ai_error = f"HTTP Error {e.code}: {error_body}"
+                    body_str = raw_body
+                    if len(body_str) > 200:
+                        body_str = body_str[:200] + "..."
+                    _last_ai_error = f"HTTP Error {e.code}: {body_str}"
             except Exception:
-                _last_ai_error = f"HTTP Error {e.code}: {error_body}"
+                body_str = raw_body
+                if len(body_str) > 200:
+                    body_str = body_str[:200] + "..."
+                _last_ai_error = f"HTTP Error {e.code}: {body_str}"
         except Exception:
-            _last_ai_error = f"HTTP Error {e.code}: {e.reason}"
+            reason_str = str(e.reason).strip()
+            if len(reason_str) > 200:
+                reason_str = reason_str[:200] + "..."
+            _last_ai_error = f"HTTP Error {e.code}: {reason_str}"
         return None
     except Exception as e:
         # Gracefully fail and capture exception

@@ -275,6 +275,7 @@ def test_cli_ui_onboarding_reminder_printed(tmp_path, monkeypatch):
     monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
     config_file = tmp_path / "config.json"
     monkeypatch.setattr("termstory.config.get_config_path", lambda: str(config_file))
+    monkeypatch.delenv("TERMSTORY_MISSING_TIMESTAMPS", raising=False)
     
     # Mock run_ingestion
     monkeypatch.setattr("termstory.cli.run_ingestion", lambda db: None)

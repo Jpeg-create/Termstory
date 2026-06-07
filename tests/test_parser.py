@@ -154,7 +154,6 @@ def test_parse_all_histories_project_paths_propagation(monkeypatch, tmp_path):
     
     class MockTimestampDetective:
         def __init__(self, search_root, project_paths):
-            nonlocal received_project_paths
             received_project_paths.extend(project_paths)
             
         def resolve_all(self, items):

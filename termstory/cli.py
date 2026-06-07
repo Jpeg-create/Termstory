@@ -245,8 +245,8 @@ def show_ui(
                 console.print("Alternatively, press [bold]? [/bold]inside the TUI to open the onboarding settings anytime.\n")
                 _cfg["has_seen_onboarding_reminder"] = True
                 save_config(_cfg)
-        except Exception:
-            pass
+        except Exception as e:
+            Console(stderr=True).print(f"[dim]Note: failed to persist onboarding reminder flag: {e}[/dim]")
 
 @app.command("reset")
 def reset_cmd():
