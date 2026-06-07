@@ -156,7 +156,9 @@ def show_ui(
     # boot sequence to offer automatic configuration injection into the user's shell
     # config file. We detect the user's default shell (bash vs zsh) and write the
     # appropriate timekeeping directive. Never perform this without explicit user consent ('Y').
-    if os.environ.get("TERMSTORY_MISSING_TIMESTAMPS") == "1":
+    from termstory.config import load_config, save_config
+    _cfg = load_config()
+    if os.environ.get("TERMSTORY_MISSING_TIMESTAMPS") == "1" and not _cfg.get("has_seen_timestamp_prompt", False):
         # Detect default shell from $SHELL (e.g. /bin/bash, /usr/bin/zsh)
         shell_path = os.environ.get("SHELL", "")
         is_bash = "bash" in os.path.basename(shell_path).lower()
@@ -183,6 +185,8 @@ def show_ui(
             response = "n"
             
         if response in ("y", "yes"):
+            _cfg["has_seen_timestamp_prompt"] = True
+            save_config(_cfg)
             try:
                 with open(config_path, "a") as f:
                     f.write(config_directive)
@@ -195,6 +199,8 @@ def show_ui(
                 console.print(f"[bold red]Error modifying {config_display}: {e}[/bold red]")
                 console.print("Continuing with legacy history fallback...")
         else:
+            _cfg["has_seen_timestamp_prompt"] = True
+            save_config(_cfg)
             console.print("Continuing with legacy history fallback...")
             
     from termstory.tui import TermStoryWorkspace
