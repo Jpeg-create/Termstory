@@ -301,4 +301,34 @@ def test_cli_ui_onboarding_reminder_printed(tmp_path, monkeypatch):
     assert "Hint: TermStory works best with AI summaries enabled!" not in result2.stdout
 
 
+def test_cli_ui_onboarding_reminder_suppressed_if_seen_onboarding(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_cli_ui.db"
+    monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr("termstory.config.get_config_path", lambda: str(config_file))
+    monkeypatch.delenv("TERMSTORY_MISSING_TIMESTAMPS", raising=False)
+    
+    # Save config with has_seen_onboarding = True
+    import json
+    with open(config_file, "w") as f:
+        json.dump({
+            "has_seen_onboarding": True,
+            "active_provider": "disabled",
+            "has_seen_onboarding_reminder": False
+        }, f)
+        
+    # Mock run_ingestion
+    monkeypatch.setattr("termstory.cli.run_ingestion", lambda db: None)
+    
+    # Mock TermStoryWorkspace.run to do nothing
+    monkeypatch.setattr("termstory.tui.TermStoryWorkspace.run", lambda self: None)
+    
+    runner = CliRunner()
+    result = runner.invoke(app, ["ui"])
+    assert result.exit_code == 0
+    assert "Hint: TermStory works best with AI summaries enabled!" not in result.stdout
+
+
+
 

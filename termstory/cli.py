@@ -241,7 +241,11 @@ def show_ui(
         try:
             from termstory.config import load_config, save_config
             _cfg = load_config()
-            if not _cfg.get("has_seen_onboarding_reminder", False) and _cfg.get("active_provider", "disabled") == "disabled":
+            if (
+                not _cfg.get("has_seen_onboarding_reminder", False)
+                and not _cfg.get("has_seen_onboarding", False)
+                and _cfg.get("active_provider", "disabled") == "disabled"
+            ):
                 console.print("\n[bold yellow]💡 Hint: TermStory works best with AI summaries enabled![/bold yellow]")
                 console.print("To configure a local or cloud AI provider (Groq, OpenAI, Ollama), run:")
                 console.print("  [cyan]termstory config set active_provider groq[/cyan] (or [cyan]openai[/cyan] / [cyan]ollama[/cyan])")
