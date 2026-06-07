@@ -795,7 +795,7 @@ class TestDetectMacosSystemLog(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         try:
             log_path = os.path.join(tmp, "install.log")
-            dt = datetime.fromtimestamp(FOUR_YEARS_AGO)
+            dt = datetime.fromtimestamp(FOUR_YEARS_AGO, tz=timezone.utc)
             stamp = dt.strftime("%Y-%m-%d %H:%M:%S")
             with open(log_path, "w") as f:
                 f.write(f"{stamp}+00 host installd[1]: Installed: jq\n")
@@ -803,7 +803,38 @@ class TestDetectMacosSystemLog(unittest.TestCase):
                  patch("builtins.open", return_value=open(log_path)):
                 ts = self.d.detect_macos_syslog("jq")
             self.assertIsNotNone(ts)
-            self.assertEqual(ts, int(dt.replace(microsecond=0).timestamp()))
+            self.assertEqual(ts, int(dt.timestamp()))
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_detect_macos_syslog_timezone_offsets(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            log_path = os.path.join(tmp, "install.log")
+            # 2026-04-01 04:22:04-07:00 is 1775042524
+            with open(log_path, "w") as f:
+                f.write("2026-04-01 04:22:04-07 MacBook-Pro system_installd[584]: Installed \"jq\" (1.6)\n")
+            with patch("os.path.exists", return_value=True), \
+                 patch("builtins.open", return_value=open(log_path)):
+                ts = self.d.detect_macos_syslog("jq")
+            self.assertIsNotNone(ts)
+            self.assertEqual(ts, 1775042524)
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_detect_macos_syslog_package_filter_strict(self):
+        """Should not match unrelated packages containing 'brew' if target package isn't present."""
+        tmp = tempfile.mkdtemp()
+        try:
+            log_path = os.path.join(tmp, "install.log")
+            with open(log_path, "w") as f:
+                f.write("2026-04-01 04:22:04-07 MacBook-Pro system_installd[584]: Installed: brew-cask google-chrome\n")
+            with patch("os.path.exists", return_value=True), \
+                 patch("builtins.open", return_value=open(log_path)):
+                ts = self.d.detect_macos_syslog("jq")
+            self.assertIsNone(ts)
         finally:
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)

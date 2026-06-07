@@ -70,7 +70,7 @@ def generate_ai_summary(
     provider: str,
     project_name: str = "Other",
     commits: Optional[List[str]] = None,
-    timeout: float = 30.0
+    timeout: Optional[float] = None
 ) -> Optional[str]:
     """Scrub commands and query the configured LLM API (Groq or Ollama) to generate a summary."""
     if not commands:
@@ -130,7 +130,7 @@ def generate_ai_summary(
     
     from termstory.config import load_config
     config = load_config()
-    effective_timeout = config.get("request_timeout_seconds", timeout)
+    effective_timeout = timeout if timeout is not None else config.get("request_timeout_seconds", 30.0)
     return _send_llm_request(
         prompt, api_key, api_base_url, model_name, provider,
         max_tokens=500, timeout=effective_timeout
@@ -143,7 +143,7 @@ def generate_timeframe_summary(
     api_base_url: str,
     model_name: str,
     provider: str,
-    timeout: float = 30.0
+    timeout: Optional[float] = None
 ) -> Optional[str]:
     """Query LLM to generate a professional action-oriented summary of a timeframe."""
     if provider == "disabled":
@@ -220,7 +220,7 @@ def generate_timeframe_summary(
     
     from termstory.config import load_config
     config = load_config()
-    effective_timeout = config.get("request_timeout_seconds", timeout)
+    effective_timeout = timeout if timeout is not None else config.get("request_timeout_seconds", 30.0)
     return _send_llm_request(
         prompt, api_key, api_base_url, model_name, provider,
         max_tokens=1500, timeout=effective_timeout
@@ -417,7 +417,7 @@ def generate_daily_chronicle(
     api_base_url: str,
     model_name: str,
     provider: str,
-    timeout: float = 30.0
+    timeout: Optional[float] = None
 ) -> Optional[str]:
     """Scrub inputs, build prompt, and call LLM chat completions endpoint to generate the Daily Chronicle."""
     if provider == "disabled" or not sessions:
@@ -426,7 +426,7 @@ def generate_daily_chronicle(
     prompt = generate_daily_chronicle_prompt(github_username, session_date, sessions, projects)
     from termstory.config import load_config
     config = load_config()
-    effective_timeout = config.get("request_timeout_seconds", timeout)
+    effective_timeout = timeout if timeout is not None else config.get("request_timeout_seconds", 30.0)
     return _send_llm_request(
         prompt, api_key, api_base_url, model_name, provider,
         max_tokens=2000, timeout=effective_timeout
@@ -455,7 +455,7 @@ def generate_wrapped_summary(
     api_base_url: str,
     model_name: str,
     provider: str,
-    timeout: float = 30.0
+    timeout: Optional[float] = None
 ) -> Optional[str]:
     """Query LLM to generate the wittiest and sharpest Behavioral Audit & Verdict for TermStory Wrapped."""
     if provider == "disabled":
@@ -514,7 +514,7 @@ def generate_wrapped_summary(
     
     from termstory.config import load_config
     config = load_config()
-    effective_timeout = config.get("request_timeout_seconds", timeout)
+    effective_timeout = timeout if timeout is not None else config.get("request_timeout_seconds", 30.0)
     return _send_llm_request(
         prompt, api_key, api_base_url, model_name, provider,
         max_tokens=1500, timeout=effective_timeout

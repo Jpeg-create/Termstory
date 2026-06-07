@@ -689,6 +689,7 @@ Config lives at `~/.termstory/config.json`:
 {
     "ai_enabled": true,
     "active_provider": "groq",
+    "request_timeout_seconds": 30,
     "has_seen_onboarding": true,
     "providers": {
         "groq": {
@@ -716,6 +717,12 @@ Config lives at `~/.termstory/config.json`:
 ```
 
 All settings are editable via `termstory config set <dot.path> <value>`.
+
+Key configuration parameters:
+- `ai_enabled` (bool): Toggle AI summaries on/off.
+- `active_provider` (string): Set to `"groq"`, `"openai"`, `"ollama"`, `"custom"`, or `"disabled"`.
+- `request_timeout_seconds` (int): HTTP request timeout (in seconds) for LLM API calls. Defaults to `30`.
+- `providers.<name>.<param>`: Provider-specific endpoints, API keys, and model names.
 
 ---
 

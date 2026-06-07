@@ -366,4 +366,26 @@ def test_daily_chronicle_session_truncation():
     assert "vim file_0.py" not in prompt
 
 
+def test_ai_explicit_timeout_override(monkeypatch):
+    """Calling generate_ai_summary with a custom timeout should override any config defaults."""
+    captured = {}
+
+    def mock_urlopen(req, timeout=None):
+        captured["timeout"] = timeout
+        resp_payload = {"choices": [{"message": {"content": "ok"}}]}
+        return MockResponse(json.dumps(resp_payload).encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    # Even if config sets it to 42, the explicit call parameter should win
+    monkeypatch.setattr("termstory.config.load_config", lambda: {"request_timeout_seconds": 42})
+
+    res = generate_ai_summary(
+        ["pytest tests/"], "test-key", "https://api.groq.com/openai/v1", "llama3", "groq",
+        timeout=15.0
+    )
+    assert res == "ok"
+    assert captured["timeout"] == 15.0
+
+
+
 

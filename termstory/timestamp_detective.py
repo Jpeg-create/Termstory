@@ -953,20 +953,32 @@ class TimestampDetective:
             return None
 
         needle = package.lower()
-        date_re = re.compile(r'^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})')
+        date_re = re.compile(r'^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})([+-]\d{2}:?\d{2}|[+-]\d{2}|Z)?')
         best_ts: Optional[int] = None
         for line in lines:
             low = line.lower()
             if "installed" not in low:
                 continue
-            if needle not in low and "brew" not in low:
+            if needle not in low:
                 continue
             m = date_re.match(line.strip())
             if not m:
                 continue
             date_str = m.group(1).replace("T", " ")
+            offset = m.group(2)
             try:
-                ts = int(datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").timestamp())
+                if offset:
+                    if offset == "Z":
+                        offset = "+00:00"
+                    elif len(offset) == 3:  # e.g. -07 or +00
+                        offset = offset + ":00"
+                    elif len(offset) == 5:  # e.g. -0700
+                        offset = offset[:3] + ":" + offset[3:]
+                    iso_str = date_str.replace(" ", "T") + offset
+                    dt = datetime.fromisoformat(iso_str)
+                    ts = int(dt.timestamp())
+                else:
+                    ts = int(datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").timestamp())
             except Exception:
                 continue
             if self._is_valid_timestamp(ts) and (best_ts is None or ts > best_ts):

@@ -75,6 +75,18 @@ def test_cli_config_commands(tmp_path, monkeypatch):
     result = runner.invoke(app, ["config", "get", "ai_enabled"])
     assert result.exit_code == 0
     assert "True" in result.stdout
+
+    # 5b. Test setting numeric config
+    result = runner.invoke(app, ["config", "set", "request_timeout_seconds", "45"])
+    assert result.exit_code == 0
+    import json
+    with open(config_file, "r") as f:
+        data = json.load(f)
+    assert data["request_timeout_seconds"] == 45
+
+    result = runner.invoke(app, ["config", "get", "request_timeout_seconds"])
+    assert result.exit_code == 0
+    assert "45" in result.stdout
     
     # 6. Test config list with redacting
     result = runner.invoke(app, ["config", "list"])

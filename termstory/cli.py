@@ -224,11 +224,30 @@ def config_set(key: str, value: str):
     from termstory.config import load_config, save_config, set_config_value, get_config_value
     config = load_config()
     
-    # Type conversion for booleans
-    if key in ("ai_enabled", "has_seen_onboarding") or key.endswith(".ai_enabled") or key.endswith(".has_seen_onboarding"):
+    current_val = get_config_value(config, key)
+    if isinstance(current_val, bool):
         converted_value = value.lower() in ("true", "1", "yes")
+    elif isinstance(current_val, int):
+        try:
+            converted_value = int(value)
+        except ValueError:
+            converted_value = value
+    elif isinstance(current_val, float):
+        try:
+            converted_value = float(value)
+        except ValueError:
+            converted_value = value
     else:
-        converted_value = value
+        if key in ("ai_enabled", "has_seen_onboarding") or key.endswith(".ai_enabled") or key.endswith(".has_seen_onboarding"):
+            converted_value = value.lower() in ("true", "1", "yes")
+        else:
+            try:
+                if "." in value:
+                    converted_value = float(value)
+                else:
+                    converted_value = int(value)
+            except ValueError:
+                converted_value = value
         
     set_config_value(config, key, converted_value)
     save_config(config)
