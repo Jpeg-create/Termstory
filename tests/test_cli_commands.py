@@ -126,6 +126,8 @@ def test_cli_ui_onboarding_missing_timestamps_yes(tmp_path, monkeypatch):
     
     # Flag missing timestamps manually
     monkeypatch.setenv("TERMSTORY_MISSING_TIMESTAMPS", "1")
+    # Exercise the zsh branch of the shell-aware onboarding flow
+    monkeypatch.setenv("SHELL", "/bin/zsh")
     
     # Mock open for ~/.zshrc appending
     zshrc_file = tmp_path / ".zshrc"
@@ -163,5 +165,62 @@ def test_cli_ui_onboarding_missing_timestamps_no(tmp_path, monkeypatch):
     
     assert "Continuing with legacy history fallback" in result.stdout
     assert len(workspace_runs) == 1
+
+
+def test_cli_ui_onboarding_bash_shell(tmp_path, monkeypatch):
+    """On a bash shell, onboarding should write HISTTIMEFORMAT to ~/.bashrc."""
+    db_file = tmp_path / "test_cli_ui.db"
+    monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.cli.run_ingestion", lambda db: None)
+    monkeypatch.setenv("TERMSTORY_MISSING_TIMESTAMPS", "1")
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    
+    bashrc_file = tmp_path / ".bashrc"
+
+    def fake_expand(p):
+        if p in ("~/.bashrc", "~/.bash_profile"):
+            return str(bashrc_file)
+        if p == "~":
+            return str(tmp_path)
+        return p
+    monkeypatch.setattr("os.path.expanduser", fake_expand)
+    
+    runner = CliRunner()
+    result = runner.invoke(app, ["ui"], input="y\n")
+    
+    assert result.exit_code == 0
+    assert "Done! Please restart your terminal" in result.stdout
+    assert bashrc_file.exists()
+    content = bashrc_file.read_text()
+    assert 'HISTTIMEFORMAT="%F %T "' in content
+    assert "setopt EXTENDED_HISTORY" not in content
+
+
+def test_run_ingestion_no_history_files(tmp_path, monkeypatch, capsys):
+    """Case A — no history files found at all (fresh setup)."""
+    from termstory.cli import run_ingestion
+    monkeypatch.setattr("termstory.cli.get_history_files", lambda: [])
+    db = Database(str(tmp_path / "t.db"))
+    db.init_db()
+    
+    run_ingestion(db)
+    err = capsys.readouterr().err
+    assert "No shell history files found" in err
+    assert "fresh setup" in err
+
+
+def test_run_ingestion_empty_history_file(tmp_path, monkeypatch, capsys):
+    """Case B — a history file exists but is empty."""
+    from termstory.cli import run_ingestion
+    empty = tmp_path / ".zsh_history"
+    empty.write_text("")
+    monkeypatch.setattr("termstory.cli.get_history_files", lambda: [str(empty)])
+    db = Database(str(tmp_path / "t.db"))
+    db.init_db()
+    
+    run_ingestion(db)
+    err = capsys.readouterr().err
+    assert "exists but is empty" in err
 
 

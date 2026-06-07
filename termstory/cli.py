@@ -50,10 +50,21 @@ def run_ingestion(db: Database) -> None:
     """Helper to parse active history files and store them in the database"""
     history_files = get_history_files()
     if not history_files:
+        # Case A — no history files found at all (truly fresh setup)
         Console(stderr=True).print(
-            "\n[bold yellow]⚠️  Warning: No shell history files detected or readable.[/bold yellow]\n"
-            "TermStory could not find ~/.zsh_history or other active history files.\n"
-            "If you are on macOS, please ensure your Terminal app has Full Disk Access in System Settings.\n"
+            "\n[bold yellow]⚠️  No shell history files found.[/bold yellow]\n"
+            "It looks like this might be a fresh setup. Open your terminal and run a few\n"
+            "commands first, then re-run `termstory ui` to see your history.\n"
+            "Tip: Add `setopt EXTENDED_HISTORY` to ~/.zshrc now so timestamps are recorded from the start.\n"
+        )
+        return
+        
+    # Case B — history file(s) exist but every one is empty (terminal opened,
+    # but no commands ever typed)
+    if all(os.path.getsize(path) == 0 for path in history_files):
+        Console(stderr=True).print(
+            "\n[bold yellow]⚠️  Your shell history file exists but is empty.[/bold yellow]\n"
+            "Run some commands in your terminal first, then re-run `termstory ui`.\n"
         )
         return
         
@@ -141,27 +152,47 @@ def show_ui(
     run_ingestion(db)
     
     # White-Glove Onboarding Prompt:
-    # If the parser flags that Zsh history timestamps are missing, pause the standard
-    # boot sequence to offer automatic configuration injection (setopt EXTENDED_HISTORY)
-    # into the user's ~/.zshrc file. Never perform this without explicit user consent ('Y').
+    # If the parser flags that shell history timestamps are missing, pause the standard
+    # boot sequence to offer automatic configuration injection into the user's shell
+    # config file. We detect the user's default shell (bash vs zsh) and write the
+    # appropriate timekeeping directive. Never perform this without explicit user consent ('Y').
     if os.environ.get("TERMSTORY_MISSING_TIMESTAMPS") == "1":
+        # Detect default shell from $SHELL (e.g. /bin/bash, /usr/bin/zsh)
+        shell_path = os.environ.get("SHELL", "")
+        is_bash = "bash" in os.path.basename(shell_path).lower()
+        
+        if is_bash:
+            # On macOS bash login shells read ~/.bash_profile; elsewhere ~/.bashrc
+            if sys.platform == "darwin" and os.path.exists(os.path.expanduser("~/.bash_profile")):
+                config_path = os.path.expanduser("~/.bash_profile")
+            else:
+                config_path = os.path.expanduser("~/.bashrc")
+            config_directive = '\n# TermStory Timekeeping\nexport HISTTIMEFORMAT="%F %T "\n'
+        else:
+            config_path = os.path.expanduser("~/.zshrc")
+            config_directive = "\n# TermStory Timekeeping\nsetopt EXTENDED_HISTORY\n"
+        config_display = config_path.replace(os.path.expanduser("~"), "~", 1)
+        
         console.print("\n[bold yellow]⚠️  TermStory needs your shell to record timestamps to build your timeline accurately.[/bold yellow]")
         try:
-            response = input("Would you like TermStory to automatically enable EXTENDED_HISTORY in your ~/.zshrc file? [Y/n] ").strip().lower()
+            response = input(
+                "Would you like TermStory to automatically enable history timestamps in your shell config file (`~/.zshrc` or `~/.bashrc`)? [Y/n] "
+            ).strip().lower()
         except (KeyboardInterrupt, EOFError):
             console.print()
             response = "n"
             
         if response in ("y", "yes"):
-            zshrc_path = os.path.expanduser("~/.zshrc")
             try:
-                with open(zshrc_path, "a") as f:
-                    f.write("\n# TermStory Timekeeping\nsetopt EXTENDED_HISTORY\n")
-                console.print("\n[bold green]✅ Done! Please restart your terminal or run `source ~/.zshrc` for the changes to take effect, then run `termstory ui` again.[/bold green]\n")
-                import sys
+                with open(config_path, "a") as f:
+                    f.write(config_directive)
+                console.print(
+                    f"\n[bold green]✅ Done! Please restart your terminal or run `source {config_display}` "
+                    f"for the changes to take effect, then run `termstory ui` again.[/bold green]\n"
+                )
                 sys.exit(0)
             except Exception as e:
-                console.print(f"[bold red]Error modifying ~/.zshrc: {e}[/bold red]")
+                console.print(f"[bold red]Error modifying {config_display}: {e}[/bold red]")
                 console.print("Continuing with legacy history fallback...")
         else:
             console.print("Continuing with legacy history fallback...")

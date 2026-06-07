@@ -9,7 +9,9 @@ def _send_llm_request(
     api_key: str,
     api_base_url: str,
     model_name: str,
-    provider: str
+    provider: str,
+    max_tokens: int = 1500,
+    timeout: float = 30.0
 ) -> Optional[str]:
     """Shared helper to construct and send the OpenAI-compatible chat completion request."""
     if provider == "disabled":
@@ -38,7 +40,7 @@ def _send_llm_request(
             }
         ],
         "temperature": 0.0,
-        "max_tokens": 500
+        "max_tokens": max_tokens
     }
     
     req_data = json.dumps(body).encode("utf-8")
@@ -46,7 +48,7 @@ def _send_llm_request(
     
     try:
         # Set a reasonable timeout for the TUI background thread
-        with urllib.request.urlopen(req, timeout=15.0) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             resp_data = response.read().decode("utf-8")
             resp_json = json.loads(resp_data)
             result = resp_json["choices"][0]["message"]["content"].strip()
@@ -67,7 +69,8 @@ def generate_ai_summary(
     model_name: str,
     provider: str,
     project_name: str = "Other",
-    commits: Optional[List[str]] = None
+    commits: Optional[List[str]] = None,
+    timeout: float = 30.0
 ) -> Optional[str]:
     """Scrub commands and query the configured LLM API (Groq or Ollama) to generate a summary."""
     if not commands:
@@ -86,6 +89,9 @@ def generate_ai_summary(
         return None
         
     # 2. Formulate the prompt
+    MAX_COMMANDS_PER_PROMPT = 80
+    if len(sanitized_cmds) > MAX_COMMANDS_PER_PROMPT:
+        sanitized_cmds = sanitized_cmds[-MAX_COMMANDS_PER_PROMPT:]  # keep most recent
     commands_block = "\n".join(f"- {cmd}" for cmd in sanitized_cmds)
     
     commits_block = ""
@@ -122,7 +128,13 @@ def generate_ai_summary(
         "Output format: Return ONLY the raw, polished console text block. No markdown formatting, no conversational filler, and no surrounding quotes."
     )
     
-    return _send_llm_request(prompt, api_key, api_base_url, model_name, provider)
+    from termstory.config import load_config
+    config = load_config()
+    effective_timeout = config.get("request_timeout_seconds", timeout)
+    return _send_llm_request(
+        prompt, api_key, api_base_url, model_name, provider,
+        max_tokens=500, timeout=effective_timeout
+    )
 
 
 def generate_timeframe_summary(
@@ -130,7 +142,8 @@ def generate_timeframe_summary(
     api_key: str,
     api_base_url: str,
     model_name: str,
-    provider: str
+    provider: str,
+    timeout: float = 30.0
 ) -> Optional[str]:
     """Query LLM to generate a professional action-oriented summary of a timeframe."""
     if provider == "disabled":
@@ -205,7 +218,13 @@ def generate_timeframe_summary(
         "Output format: Return ONLY the raw, polished console card block. No markdown formatting, no conversational filler, and no surrounding quotes."
     )
     
-    return _send_llm_request(prompt, api_key, api_base_url, model_name, provider)
+    from termstory.config import load_config
+    config = load_config()
+    effective_timeout = config.get("request_timeout_seconds", timeout)
+    return _send_llm_request(
+        prompt, api_key, api_base_url, model_name, provider,
+        max_tokens=1500, timeout=effective_timeout
+    )
 
 
 def generate_daily_chronicle_prompt(
@@ -242,6 +261,10 @@ def generate_daily_chronicle_prompt(
             "===================================================================="
         )
     
+    MAX_SESSIONS_PER_PROMPT = 20
+    if len(sessions) > MAX_SESSIONS_PER_PROMPT:
+        sessions = sessions[-MAX_SESSIONS_PER_PROMPT:]  # keep most recent
+
     project_map = {p.id: p.name for p in projects if p.id is not None}
     chrono_lines = []
     
@@ -393,14 +416,21 @@ def generate_daily_chronicle(
     api_key: str,
     api_base_url: str,
     model_name: str,
-    provider: str
+    provider: str,
+    timeout: float = 30.0
 ) -> Optional[str]:
     """Scrub inputs, build prompt, and call LLM chat completions endpoint to generate the Daily Chronicle."""
     if provider == "disabled" or not sessions:
         return None
         
     prompt = generate_daily_chronicle_prompt(github_username, session_date, sessions, projects)
-    return _send_llm_request(prompt, api_key, api_base_url, model_name, provider)
+    from termstory.config import load_config
+    config = load_config()
+    effective_timeout = config.get("request_timeout_seconds", timeout)
+    return _send_llm_request(
+        prompt, api_key, api_base_url, model_name, provider,
+        max_tokens=2000, timeout=effective_timeout
+    )
 
 
 def generate_wrapped_summary(
@@ -424,7 +454,8 @@ def generate_wrapped_summary(
     api_key: str,
     api_base_url: str,
     model_name: str,
-    provider: str
+    provider: str,
+    timeout: float = 30.0
 ) -> Optional[str]:
     """Query LLM to generate the wittiest and sharpest Behavioral Audit & Verdict for TermStory Wrapped."""
     if provider == "disabled":
@@ -481,6 +512,12 @@ def generate_wrapped_summary(
         "Output format: Return ONLY the raw, polished console text lines matching the segments of the behavioral audit panel. No introductory conversational text, no markdown styling, no explanations."
     )
     
-    return _send_llm_request(prompt, api_key, api_base_url, model_name, provider)
+    from termstory.config import load_config
+    config = load_config()
+    effective_timeout = config.get("request_timeout_seconds", timeout)
+    return _send_llm_request(
+        prompt, api_key, api_base_url, model_name, provider,
+        max_tokens=1500, timeout=effective_timeout
+    )
 
 

@@ -62,6 +62,7 @@ Usage
 import os
 import re
 import glob
+import getpass
 import subprocess
 import difflib
 import site
@@ -822,6 +823,156 @@ class TimestampDetective:
 
         return None
 
+    def detect_macos_system_log(
+        self, command: str, virtual_cwd: str
+    ) -> Optional[Tuple[int, str]]:
+        """
+        Detector 6 — macOS System Log Anchors (last / brew log)  🟡 Low-Medium confidence.
+
+        macOS keeps forensic trails that can anchor legacy commands:
+
+          • `brew install <formula>` → `brew log <formula>` exposes the tap's git
+            history for that formula.  The most recent commit date is a strong
+            proxy for when the formula was last updated / installed.
+          • login/reboot-adjacent commands (`ssh`, `sudo`, `su`) → the macOS
+            `last` command records login session timestamps, which can anchor
+            commands that were run right after a login session.
+
+        As a secondary source, `/private/var/log/install.log` records exact
+        installer timestamps for package installs (see `detect_macos_syslog`).
+
+        Returns (unix_timestamp, source_string) or None.
+        """
+        cmd = command.strip()
+
+        # ── brew install <formula> → brew log <formula> ─────────────────────
+        m = re.match(r'^brew\s+install\s+([\w@/.\-]+)', cmd)
+        if m:
+            # Strip tap prefix (homebrew/core/jq → jq) and version pin (jq@1.6 → jq)
+            formula = m.group(1).split("/")[-1].split("@")[0]
+            try:
+                res = subprocess.run(
+                    ["brew", "log", "--max-count=1", formula],
+                    capture_output=True, text=True, timeout=5
+                )
+                if res.returncode == 0 and res.stdout:
+                    ts = self._parse_git_log_date(res.stdout)
+                    if ts and self._is_valid_timestamp(ts):
+                        return (ts, f"brew log: {formula}")
+            except Exception:
+                pass
+
+            # Fallback: scan the macOS installer system log for this formula
+            ts = self.detect_macos_syslog(formula)
+            if ts and self._is_valid_timestamp(ts):
+                return (ts, f"install.log: {formula}")
+
+        # ── login/reboot-adjacent commands → last -1 <username> ─────────────
+        if re.match(r'^(?:sudo|su|ssh)(?:\s|$)', cmd):
+            try:
+                username = getpass.getuser()
+            except Exception:
+                username = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+            if username:
+                try:
+                    res = subprocess.run(
+                        ["last", "-1", username],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if res.returncode == 0 and res.stdout:
+                        ts = self._parse_last_login(res.stdout)
+                        if ts and self._is_valid_timestamp(ts):
+                            return (ts, f"last login: {username}")
+                except Exception:
+                    pass
+
+        return None
+
+    def _parse_git_log_date(self, log_output: str) -> Optional[int]:
+        """
+        Parse the first `Date:` line out of `git log` (or `brew log`) output and
+        return it as a Unix timestamp.  Handles both the default git date format
+        and the ISO (`--date=iso`) format.
+        """
+        for line in log_output.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("Date:"):
+                date_str = stripped[len("Date:"):].strip()
+                for fmt in ("%a %b %d %H:%M:%S %Y %z", "%Y-%m-%d %H:%M:%S %z"):
+                    try:
+                        return int(datetime.strptime(date_str, fmt).timestamp())
+                    except Exception:
+                        continue
+        return None
+
+    def _parse_last_login(self, last_output: str) -> Optional[int]:
+        """
+        Parse the login timestamp from macOS `last` output.
+
+        A typical line looks like:
+            user  ttys000  192.168.0.1  Thu Jun  5 09:14   still logged in
+
+        `last` omits the year, so we assume the current year and step back one
+        year if that would place the login in the future.
+        """
+        m = re.search(
+            r'([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{1,2}:\d{2})',
+            last_output
+        )
+        if not m:
+            return None
+        date_str = re.sub(r'\s+', ' ', m.group(1)).strip()
+        try:
+            dt = datetime.strptime(date_str, "%a %b %d %H:%M")
+        except Exception:
+            return None
+        now = datetime.now()
+        dt = dt.replace(year=now.year)
+        if dt.timestamp() > now.timestamp():
+            dt = dt.replace(year=now.year - 1)
+        return int(dt.timestamp())
+
+    def detect_macos_syslog(self, package: str) -> Optional[int]:
+        """
+        Helper — scan macOS `/private/var/log/install.log` for an install record
+        of `package` (or any brew-related line) and return the most recent
+        matching install timestamp.
+
+        Lines look like:
+            2024-01-01 12:00:00+00 host installd[1]: ... Installed: <formula>
+
+        Returns the Unix timestamp or None.
+        """
+        log_path = "/private/var/log/install.log"
+        if not os.path.exists(log_path):
+            return None
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+        except Exception:
+            return None
+
+        needle = package.lower()
+        date_re = re.compile(r'^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})')
+        best_ts: Optional[int] = None
+        for line in lines:
+            low = line.lower()
+            if "installed" not in low:
+                continue
+            if needle not in low and "brew" not in low:
+                continue
+            m = date_re.match(line.strip())
+            if not m:
+                continue
+            date_str = m.group(1).replace("T", " ")
+            try:
+                ts = int(datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").timestamp())
+            except Exception:
+                continue
+            if self._is_valid_timestamp(ts) and (best_ts is None or ts > best_ts):
+                best_ts = ts
+        return best_ts
+
     def _run_all_detectors(
         self, command: str, virtual_cwd: str
     ) -> Optional[Tuple[int, str]]:
@@ -834,6 +985,7 @@ class TimestampDetective:
           3. Package manager     — install artifact mtime (brew/pip/npm/cargo/gem)
           4. Docker image        — docker image inspect timestamp
           5. Venv / lockfiles    — lockfile/sentinel mtime
+          6. macOS system log    — brew log / last login anchors
 
         Each detector is wrapped in a try/except so a single buggy detector
         cannot crash the entire pipeline.
@@ -844,6 +996,7 @@ class TimestampDetective:
             self.detect_package_manager,
             self.detect_docker,
             self.detect_venv_lockfile,
+            self.detect_macos_system_log,
         ]
         for detector in detectors:
             try:

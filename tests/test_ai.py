@@ -275,4 +275,95 @@ def test_daily_chronicle_prompt():
     assert "NO CORPORATE SLOP" in prompt
 
 
+def test_ai_summary_max_tokens_and_timeout(monkeypatch):
+    """generate_ai_summary should request max_tokens=500 and the configured timeout."""
+    captured = {}
+
+    def mock_urlopen(req, timeout=None):
+        captured["timeout"] = timeout
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        resp_payload = {"choices": [{"message": {"content": "ok"}}]}
+        return MockResponse(json.dumps(resp_payload).encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    monkeypatch.setattr("termstory.config.load_config", lambda: {"request_timeout_seconds": 42})
+
+    res = generate_ai_summary(
+        ["pytest tests/"], "test-key", "https://api.groq.com/openai/v1", "llama3", "groq"
+    )
+    assert res == "ok"
+    assert captured["body"]["max_tokens"] == 500
+    assert captured["timeout"] == 42
+
+
+def test_ai_summary_command_truncation(monkeypatch):
+    """More than MAX_COMMANDS_PER_PROMPT commands should be truncated to the most recent 80."""
+    captured = {}
+
+    def mock_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        resp_payload = {"choices": [{"message": {"content": "ok"}}]}
+        return MockResponse(json.dumps(resp_payload).encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
+    commands = [f"echo cmd-{i}" for i in range(200)]
+    res = generate_ai_summary(
+        commands, "test-key", "https://api.groq.com/openai/v1", "llama3", "groq"
+    )
+    assert res == "ok"
+    content = captured["body"]["messages"][0]["content"]
+    # Oldest commands should be dropped, most-recent kept
+    assert "echo cmd-199" in content
+    assert "echo cmd-120" in content
+    assert "echo cmd-119" not in content
+    assert "echo cmd-0\n" not in content
+
+
+def test_timeframe_summary_max_tokens(monkeypatch):
+    captured = {}
+
+    def mock_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        captured["timeout"] = timeout
+        resp_payload = {"choices": [{"message": {"content": "ok"}}]}
+        return MockResponse(json.dumps(resp_payload).encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
+    res = generate_timeframe_summary(
+        stats_summary="stats", api_key="k", api_base_url="https://api.openai.com/v1",
+        model_name="gpt-4o", provider="openai"
+    )
+    assert res == "ok"
+    assert captured["body"]["max_tokens"] == 1500
+    # Falls back to default 30 when config lacks the key
+    assert captured["timeout"] == 30
+
+
+def test_daily_chronicle_session_truncation():
+    """generate_daily_chronicle_prompt should cap sessions at the 20 most recent."""
+    from termstory.ai import generate_daily_chronicle_prompt
+    from termstory.models import Session, Command, Project
+
+    sessions = []
+    base = 1780460000
+    for i in range(30):
+        start = base + i * 10000
+        cmd = Command(timestamp=start, command=f"vim file_{i}.py")
+        sessions.append(Session(
+            id=i, start_time=start, end_time=start + 1000, duration_seconds=1000,
+            project_id=1, commands=[cmd]
+        ))
+    p = Project(id=1, name="TermStory", path="~/p", first_seen=base,
+                last_seen=base, session_count=30, total_time=1000)
+
+    prompt = generate_daily_chronicle_prompt("@u", "June 03, 2026", sessions, [p])
+    # Only the 20 most recent sessions (10..29) should appear
+    assert "vim file_29.py" in prompt
+    assert "vim file_10.py" in prompt
+    assert "vim file_9.py" not in prompt
+    assert "vim file_0.py" not in prompt
+
+
 

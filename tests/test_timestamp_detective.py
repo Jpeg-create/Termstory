@@ -710,5 +710,104 @@ class TestResolveAll(unittest.TestCase):
             self.assertLessEqual(ts_mid, max(ts_a, ts_b))
 
 
+# ---------------------------------------------------------------------------
+# H. macOS System Log Detector (Detector 6)
+# ---------------------------------------------------------------------------
+
+class TestDetectMacosSystemLog(unittest.TestCase):
+
+    def setUp(self):
+        self.d = make_detective()
+
+    @patch("subprocess.run")
+    def test_brew_install_brew_log(self, mock_run):
+        """brew install <formula> should anchor to the brew log commit date."""
+        dt = datetime.fromtimestamp(FOUR_YEARS_AGO)
+        git_date = dt.astimezone().strftime("%a %b %d %H:%M:%S %Y %z")
+        log_output = (
+            "commit abc123\n"
+            "Author: Maintainer <m@example.com>\n"
+            f"Date:   {git_date}\n\n"
+            "    jq 1.6\n"
+        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=log_output)
+        result = self.d.detect_macos_system_log("brew install jq", tempfile.gettempdir())
+        self.assertIsNotNone(result)
+        ts, label = result
+        self.assertEqual(ts, FOUR_YEARS_AGO)
+        self.assertIn("jq", label)
+        self.assertIn("brew log", label)
+
+    @patch("subprocess.run")
+    def test_brew_install_strips_tap_and_version(self, mock_run):
+        """Tap prefix and version pin should be stripped from the formula name."""
+        dt = datetime.fromtimestamp(FOUR_YEARS_AGO)
+        git_date = dt.astimezone().strftime("%a %b %d %H:%M:%S %Y %z")
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=f"commit a\nDate:   {git_date}\n\n    msg\n"
+        )
+        result = self.d.detect_macos_system_log("brew install homebrew/core/jq@1.6", tempfile.gettempdir())
+        self.assertIsNotNone(result)
+        _, label = result
+        self.assertIn("jq", label)
+        self.assertNotIn("@", label)
+
+    @patch("subprocess.run")
+    def test_last_login_anchor(self, mock_run):
+        """sudo/ssh/su commands should anchor to the most recent last login.
+
+        `last` omits the year, so the parser assumes the current year (stepping
+        back one year only if that would be in the future).
+        """
+        target = datetime.now() - timedelta(days=2)
+        last_line = target.strftime("%a %b %d %H:%M")
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=f"alice    ttys000   192.168.0.1   {last_line}   still logged in\n"
+        )
+        result = self.d.detect_macos_system_log("sudo systemctl restart x", tempfile.gettempdir())
+        self.assertIsNotNone(result)
+        ts, label = result
+
+        expected = target.replace(second=0, microsecond=0, year=datetime.now().year)
+        if expected.timestamp() > datetime.now().timestamp():
+            expected = expected.replace(year=datetime.now().year - 1)
+        # Minute-precision parsing — allow up to 60s difference
+        self.assertLessEqual(abs(ts - int(expected.timestamp())), 60)
+        self.assertIn("last login", label)
+
+    def test_unrelated_command_returns_none(self):
+        result = self.d.detect_macos_system_log("ls -la", tempfile.gettempdir())
+        self.assertIsNone(result)
+
+    def test_parse_git_log_date_iso(self):
+        dt = datetime.fromtimestamp(FOUR_YEARS_AGO)
+        iso = dt.astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+        ts = self.d._parse_git_log_date(f"commit x\nDate:   {iso}\n\n    msg\n")
+        self.assertEqual(ts, FOUR_YEARS_AGO)
+
+    def test_detect_macos_syslog_missing_file(self):
+        """When install.log doesn't exist (e.g. on Linux), return None."""
+        self.assertIsNone(self.d.detect_macos_syslog("jq"))
+
+    def test_detect_macos_syslog_parses_install_line(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            log_path = os.path.join(tmp, "install.log")
+            dt = datetime.fromtimestamp(FOUR_YEARS_AGO)
+            stamp = dt.strftime("%Y-%m-%d %H:%M:%S")
+            with open(log_path, "w") as f:
+                f.write(f"{stamp}+00 host installd[1]: Installed: jq\n")
+            with patch("os.path.exists", return_value=True), \
+                 patch("builtins.open", return_value=open(log_path)):
+                ts = self.d.detect_macos_syslog("jq")
+            self.assertIsNotNone(ts)
+            self.assertEqual(ts, int(dt.replace(microsecond=0).timestamp()))
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

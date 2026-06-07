@@ -113,6 +113,7 @@ def load_config() -> dict:
     defaults = {
         "ai_enabled": False,
         "active_provider": "disabled",  # "groq", "openai", "ollama", "disabled"
+        "request_timeout_seconds": 30,
         "providers": {
             "groq": {
                 "api_key": "",
