@@ -56,3 +56,24 @@ def test_create_sessions_multiple():
     assert sessions[2].end_time == 4900
     assert sessions[2].duration_seconds == 0
     assert len(sessions[2].commands) == 1
+
+def test_create_sessions_no_cwd_fragmentation():
+    commands = [
+        # In project A
+        Command(timestamp=1000, command="cd ~/projects/projectA"),
+        Command(timestamp=1010, command="git status"),
+        # Go to home
+        Command(timestamp=1020, command="cd ~"),
+        Command(timestamp=1030, command="ls"),
+        # Go to project B
+        Command(timestamp=1040, command="cd ~/projects/projectB"),
+        Command(timestamp=1050, command="git log"),
+    ]
+    
+    sessions = create_sessions(commands)
+    
+    # We expect 1 session because there are no time gaps > 1800s
+    assert len(sessions) == 1
+    
+    assert sessions[0].id == 1
+    assert len(sessions[0].commands) == 6
