@@ -115,6 +115,35 @@ def test_find_project_root(tmp_path, monkeypatch):
     other_dir.mkdir(parents=True)
     assert find_project_root(str(other_dir)) == str(tmp_path)
 
+def test_find_project_root_symlink_escape(tmp_path, monkeypatch):
+    monkeypatch.setattr("os.path.expanduser", lambda path: str(tmp_path) if path == "~" else path)
+    
+    import os
+    # 1. Create a dummy home directory
+    home_dir = tmp_path
+    
+    # 2. Create an external directory (outside home)
+    external_dir = home_dir.parent / "external-storage"
+    external_dir.mkdir(exist_ok=True)
+    
+    external_proj = external_dir / "my-escaped-project"
+    external_proj.mkdir(exist_ok=True)
+    (external_proj / ".git").mkdir(exist_ok=True)
+    
+    # 3. Create a symlink inside home pointing to the external directory
+    symlink_dir = home_dir / "my_symlink"
+    if not symlink_dir.exists():
+        os.symlink(str(external_proj), str(symlink_dir))
+    
+    # 4. Check that find_project_root on the symlink refuses to follow the escape
+    # and returns home instead.
+    from termstory.project import find_project_root
+    assert find_project_root(str(symlink_dir)) == str(home_dir)
+    
+    # Cleanup symlink
+    if symlink_dir.exists():
+        symlink_dir.unlink()
+
 
 # ── New tests for Pass 2 & Pass 3 ────────────────────────────────────
 

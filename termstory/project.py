@@ -16,7 +16,7 @@ def extract_cd_path(cmd_str: str) -> Optional[str]:
         return None
         
     # Filter out cd flags (like -P, -L, --, etc.)
-    path_args = [t for t in tokens[1:] if not t.startswith('-')]
+    path_args = [t for t in tokens[1:] if not t.startswith('-') or t == '-']
     if not path_args:
         # cd with no arguments defaults to ~ (home)
         return "~"
@@ -103,10 +103,35 @@ def find_project_root(path: str) -> str:
     if abs_path == home or abs_path == "/":
         return abs_path
         
+    # Explicitly skip scanning known network mount prefixes to prevent blocking on stale mounts
+    if abs_path.startswith("\\\\"):
+        return home
+        
+    network_prefixes = ("/mnt", "/Volumes/smb", "/nfs", "/smb", "/Network", "/net")
+    for prefix in network_prefixes:
+        if abs_path == prefix or abs_path.startswith(prefix + "/"):
+            return home
+
+    # Check for symlink escapes: if any part of the path is a symlink that points outside the home directory
+    current_check = abs_path
+    while current_check and current_check != "/" and current_check != home:
+        if os.path.islink(current_check):
+            real_path = os.path.realpath(current_check)
+            if not real_path.startswith(home + os.sep) and real_path != home:
+                return home
+        parent = os.path.dirname(current_check)
+        if parent == current_check:
+            break
+        current_check = parent
+
+    max_depth = 50
+
     # --- Pass 1: Search for VCS roots (.git, .hg, .svn) ---
     current = abs_path
     vcs_markers = {".git", ".hg", ".svn"}
-    while current and current != home and current != "/":
+    depth = 0
+    while current and current != home and current != "/" and depth < max_depth:
+        depth += 1
         try:
             files = os.listdir(current)
             if any(marker in files for marker in vcs_markers):
@@ -126,7 +151,9 @@ def find_project_root(path: str) -> str:
         "requirements.txt", "setup.py", "Makefile", "go.mod", 
         "CMakeLists.txt", "pyproject.toml"
     }
-    while current and current != home and current != "/":
+    depth = 0
+    while current and current != home and current != "/" and depth < max_depth:
+        depth += 1
         try:
             files = os.listdir(current)
             if any(marker in files for marker in project_markers):
@@ -226,41 +253,45 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
             cwd = home
         
         for cmd in session.commands:
-            cmd_stripped = cmd.command.strip()
-            # Must start with cd followed by space/tab/EOF
-            if cmd_stripped == "cd" or cmd_stripped.startswith("cd ") or cmd_stripped.startswith("cd\t"):
-                path = extract_cd_path(cmd.command)
-                if path:
-                    # Resolve path
-                    resolved = None
-                    if path.startswith("/") or path.startswith("~"):
-                        resolved = os.path.abspath(os.path.expanduser(path))
-                    else:
-                        # Try relative to current simulated cwd
-                        test_path = os.path.abspath(os.path.join(cwd, path))
-                        if os.path.exists(test_path):
-                            resolved = test_path
+            cmd_full = cmd.command.strip()
+            subcommands = split_chained_commands(cmd_full)
+            
+            for subcmd in subcommands:
+                # Must start with cd followed by space/tab/EOF
+                if subcmd == "cd" or subcmd.startswith("cd ") or subcmd.startswith("cd\t"):
+                    path = extract_cd_path(subcmd)
+                    if path:
+                        path = os.path.expandvars(path)
+                        # Resolve path
+                        resolved = None
+                        if os.path.isabs(path) or path.startswith("~"):
+                            resolved = os.path.abspath(os.path.expanduser(path))
                         else:
-                            # Try relative to any ancestor of the current cwd (handles missing cds)
-                            ancestor = cwd
-                            while ancestor and ancestor != home and ancestor != "/":
-                                ancestor = os.path.dirname(ancestor)
-                                test_path_ancestor = os.path.abspath(os.path.join(ancestor, path))
-                                if os.path.exists(test_path_ancestor):
-                                    resolved = test_path_ancestor
-                                    break
+                            # Try relative to current simulated cwd
+                            test_path = os.path.abspath(os.path.join(cwd, path))
+                            if os.path.exists(test_path):
+                                resolved = test_path
+                            else:
+                                # Try relative to any ancestor of the current cwd (handles missing cds)
+                                ancestor = cwd
+                                while ancestor and ancestor != home and ancestor != "/":
+                                    ancestor = os.path.dirname(ancestor)
+                                    test_path_ancestor = os.path.abspath(os.path.join(ancestor, path))
+                                    if os.path.exists(test_path_ancestor):
+                                        resolved = test_path_ancestor
+                                        break
+                                        
+                                if not resolved:
+                                    # Try relative to home directory
+                                    test_path_home = os.path.abspath(os.path.join(home, path))
+                                    if os.path.exists(test_path_home):
+                                        resolved = test_path_home
+                                    else:
+                                        # Fallback: just join it relative to current cwd
+                                        resolved = test_path
                                     
-                            if not resolved:
-                                # Try relative to home directory
-                                test_path_home = os.path.abspath(os.path.join(home, path))
-                                if os.path.exists(test_path_home):
-                                    resolved = test_path_home
-                                else:
-                                    # Fallback: just join it relative to current cwd
-                                    resolved = test_path
-                                
-                    if resolved:
-                        cwd = resolved
+                        if resolved:
+                            cwd = resolved
                         
         # The project path is the resolved cwd at the end of the session
         project_root = find_project_root(cwd)
@@ -333,7 +364,7 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
                         candidate = os.path.join(abs_root, farg)
                         if os.path.exists(candidate):
                             # Score by specificity (deeper paths = better match)
-                            score = len(farg.split("/"))
+                            score = len(re.split(r'[\\/]', farg))
                             if score > best_score:
                                 best_score = score
                                 best_match = project
@@ -427,3 +458,43 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
             continue
     
     return list(projects_dict.values())
+
+def split_chained_commands(cmd_str: str) -> List[str]:
+    """Split a shell command by &&, ||, and ; while respecting single and double quotes."""
+    commands = []
+    current = []
+    in_single = False
+    in_double = False
+    i = 0
+    length = len(cmd_str)
+    
+    while i < length:
+        c = cmd_str[i]
+        if c == "'" and not in_double:
+            in_single = not in_single
+            current.append(c)
+        elif c == '"' and not in_single:
+            in_double = not in_double
+            current.append(c)
+        elif not in_single and not in_double:
+            if c == ';':
+                commands.append("".join(current))
+                current = []
+            elif c == '&' and i + 1 < length and cmd_str[i+1] == '&':
+                commands.append("".join(current))
+                current = []
+                i += 1
+            elif c == '|' and i + 1 < length and cmd_str[i+1] == '|':
+                commands.append("".join(current))
+                current = []
+                i += 1
+            else:
+                current.append(c)
+        else:
+            current.append(c)
+        i += 1
+        
+    if current:
+        commands.append("".join(current))
+        
+    return [cmd.strip() for cmd in commands if cmd.strip()]
