@@ -2676,8 +2676,8 @@ class TermStoryWorkspace(App):
                 canvas.mount(Static("\n\n[bold yellow]🚧 Under Construction: Insights View[/bold yellow]\n[dim]This section will provide high-level work analytics and focus scoring.[/dim]"))
                 
         elif node_type == "month":
-            year = node_data["year"]
-            month = node_data["month"]
+            year = int(node_data["year"])
+            month = int(node_data["month"])
             matched = [s for s in self.sessions if s.date_str.startswith(f"{year}-{month:02d}")]
             month_name = datetime(year, month, 1).strftime("%B %Y")
             canvas.render_wrapped_view(month_name, f"{year}-{month:02d}", matched, self.projects)

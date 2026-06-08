@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.14] - 2026-06-08
+### Fixed
+- **TUI UI Crash**: Fixed `TypeError` in Python 3.14 by safely casting time variables to integers when rendering the timeline tree.
+
 ## [0.2.13] - 2026-06-08
 ### Added
 - **Session-Preserving Burst Clustering**: Legacy shell history lacking timestamps is now grouped into 20-command chunks spaced realistically to preserve TermStory's 30-minute session grouping architecture.
