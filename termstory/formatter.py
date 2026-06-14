@@ -13,7 +13,7 @@ from termstory.project import disambiguate_project_names
 from rich.console import Console, Group
 from rich.table import Table
 from rich.text import Text
-from rich.box import SIMPLE
+
 
 DISPLAY_NAMES = {
     "git": "Git",
@@ -465,7 +465,7 @@ def format_projects_list(projects: List[Project]) -> str:
     total_time = sum(p.total_time for p in projects)
     total_sessions = sum(p.session_count for p in projects)
     
-    table = Table(box=SIMPLE, border_style="blue", show_header=True)
+    table = Table(box=None, border_style="blue", show_header=True)
     table.add_column("#", justify="right", style="dim")
     table.add_column("Project", style="cyan bold")
     table.add_column("Total Time", style="green")
@@ -511,7 +511,7 @@ def format_detailed_sessions(sessions: List[Session]) -> str:
         
         session_title = f"SESSION {idx}: [bold]{start_str} - {end_str}[/] ([bold green]{dur_str}[/]) on [bold cyan]{date_str}[/]"
         
-        table = Table(box=SIMPLE, show_header=True)
+        table = Table(box=None, show_header=True)
         table.add_column("Time", style="dim", width=10)
         table.add_column("Command", style="bold yellow")
         table.add_column("Exit Code", justify="right", width=10)
@@ -524,7 +524,7 @@ def format_detailed_sessions(sessions: List[Session]) -> str:
         # If there are commits in this session, show them too!
         commit_group = None
         if s.commits:
-            commit_table = Table(box=SIMPLE, show_header=True)
+            commit_table = Table(box=None, show_header=True)
             commit_table.add_column("Hash", style="cyan", width=8)
             commit_table.add_column("Commit Message")
             for c in s.commits:

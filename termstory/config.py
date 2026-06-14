@@ -30,6 +30,19 @@ def get_app_dir(dir_type: str = "data") -> str:
 
 def get_history_files() -> List[str]:
     """Return a list of existing shell history file paths"""
+    env_history = os.environ.get("HISTORY_FILES")
+    if env_history:
+        history_files = []
+        separator = "," if "," in env_history else ":"
+        parts = env_history.split(separator)
+        for part in parts:
+            part = part.strip()
+            if part:
+                expanded = os.path.realpath(os.path.abspath(os.path.expanduser(part)))
+                if os.path.exists(expanded) and expanded not in history_files:
+                    history_files.append(expanded)
+        return history_files
+
     history_files = []
     
     # 1. Check HISTFILE env variable first
@@ -55,6 +68,14 @@ def get_history_files() -> List[str]:
 
 def get_db_path() -> str:
     """Return the path to the sqlite database, creating parent directories if needed"""
+    env_path = os.environ.get("DB_PATH")
+    if env_path:
+        expanded_path = os.path.realpath(os.path.abspath(os.path.expanduser(env_path)))
+        parent_dir = os.path.dirname(expanded_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+        return expanded_path
+
     db_dir = get_app_dir("data")
     os.makedirs(db_dir, exist_ok=True)
     return os.path.join(db_dir, "termstory.db")

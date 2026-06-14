@@ -190,19 +190,19 @@ class TestDetectGitCommit(unittest.TestCase):
     def test_fuzzy_match_above_threshold(self, _mock_root):
         """Messages with only minor differences (ratio >= 0.85) should still match.
 
-        'fix auth bug' vs 'fix auth' → ratio ≈ 0.923, well above threshold.
+        'fix auth bug' vs 'fix auth debug' → ratio ≈ 0.923, well above threshold.
         We use messages that are genuinely close, not merely related.
         """
         self._mock_log("/repos/myapp", [
-            {"hash": "def5678", "timestamp": FOUR_YEARS_AGO, "message": "fix auth"}
+            {"hash": "def5678", "timestamp": FOUR_YEARS_AGO, "message": "fix auth debug"}
         ])
         result = self.d.detect_git_commit(
             'git commit -m "fix auth bug"', "/repos/myapp"
         )
-        # "fix auth bug" vs "fix auth" — should exceed 0.85 threshold
+        # "fix auth bug" vs "fix auth debug" — should exceed 0.85 threshold
         # (ratio ≈ 0.923); verify it returns a result
         ratio = __import__('difflib').SequenceMatcher(
-            None, "fix auth bug", "fix auth"
+            None, "fix auth bug", "fix auth debug"
         ).ratio()
         if ratio >= 0.85:
             self.assertIsNotNone(result)

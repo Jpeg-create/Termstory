@@ -1,6 +1,6 @@
 from datetime import datetime
 from collections import defaultdict
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from termstory.models import Session, Project, format_duration
 from termstory.formatter import classify_command, DISPLAY_NAMES
 

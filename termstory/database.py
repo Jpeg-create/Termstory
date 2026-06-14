@@ -3,13 +3,31 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from termstory.models import Command, Session, Project
 
+def safe_execute(cursor_or_conn, sql, *args, **kwargs):
+    """A reusable helper to safely execute SQL queries."""
+    if isinstance(cursor_or_conn, sqlite3.Cursor):
+        return sqlite3.Cursor.execute(cursor_or_conn, sql, *args, **kwargs)
+    else:
+        return sqlite3.Connection.execute(cursor_or_conn, sql, *args, **kwargs)
+
+class SafeCursor(sqlite3.Cursor):
+    def execute(self, sql, *args, **kwargs):
+        return safe_execute(self, sql, *args, **kwargs)
+
+class SafeConnection(sqlite3.Connection):
+    def cursor(self, cursor_factory=SafeCursor):
+        return super().cursor(cursor_factory)
+
+    def execute(self, sql, *args, **kwargs):
+        return safe_execute(self, sql, *args, **kwargs)
+
 class Database:
     def __init__(self, db_path: str):
         self.db_path = db_path
         
     def get_connection(self) -> sqlite3.Connection:
         """Create and return a database connection with foreign key support enabled"""
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn = sqlite3.connect(self.db_path, timeout=30.0, factory=SafeConnection)
         conn.execute("PRAGMA foreign_keys = ON;")
         return conn
         

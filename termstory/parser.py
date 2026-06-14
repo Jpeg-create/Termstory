@@ -8,8 +8,15 @@ from termstory.timestamp_detective import TimestampDetective
 def clean_command(cmd_str: str) -> Optional[str]:
     """Clean the command string: strip whitespace and join multiline commands with spaces"""
     # Strip ansi escape codes
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    cleaned = ansi_escape.sub('', cmd_str)
+    try:
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    except re.error:
+        ansi_escape = None
+
+    if ansi_escape:
+        cleaned = ansi_escape.sub('', cmd_str)
+    else:
+        cleaned = cmd_str
     
     cleaned = re.sub(r'\\\s*\n', ' ', cleaned)
     cleaned = " ".join(cleaned.split())
@@ -51,7 +58,10 @@ def parse_zsh_history(
     except Exception:
         return commands
 
-    pattern = re.compile(r'^:\s*(\d+):(\d+);(.*)$')
+    try:
+        pattern = re.compile(r'^:\s*(\d+):(\d+);(.*)$')
+    except re.error:
+        pattern = re.compile(r'^$')
     
     parsed_items = []  # List[dict]: {"timestamp": Optional[int], "duration": Optional[int], "command": str}
     
@@ -380,7 +390,10 @@ def parse_bash_history(
             raw_lines.append(line)
             
     # Pattern to match #1620000000 style timestamp lines
-    timestamp_pattern = re.compile(r'^#(\d{10})$')
+    try:
+        timestamp_pattern = re.compile(r'^#(\d{10})$')
+    except re.error:
+        timestamp_pattern = re.compile(r'^$')
     
     temp_commands = []
     i = 0

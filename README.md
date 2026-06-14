@@ -4,9 +4,25 @@
 
 TermStory turns your terminal history into a searchable, AI-narrated timeline of your development life. It groups shell commands into sessions, correlates Git commits, resolves project names, and renders everything into a high-density TUI dashboard — with a built-in forensic engine that can **recover the real dates of commands you typed before you even knew timestamps were missing**.
 
-```
+## Quick Start
+
+### 1. Install
+Install TermStory using pip:
+```bash
 pip install termstory
+```
+
+### 2. First Run
+Run these commands to ingest history and view your timeline:
+```bash
+# Launch the interactive TUI Dashboard
 termstory ui
+
+# View your developer activity for today
+termstory today
+
+# Search across your history and session summaries
+termstory search query
 ```
 
 ---

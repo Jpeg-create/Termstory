@@ -4,6 +4,8 @@ from typing import List, Optional, Dict
 from termstory.models import Session, Project
 
 import shlex
+import functools
+import time
 
 def extract_cd_path(cmd_str: str) -> Optional[str]:
     """Extract directory path from a cd command"""
@@ -115,9 +117,17 @@ def _listdir_with_timeout(path: str, timeout: float = 0.5) -> List[str]:
         raise exception_container[0]
     return result
 
+@functools.lru_cache(maxsize=1024)
+def _find_project_root_cached(path: str, time_bucket: int) -> str:
+    return _find_project_root_impl(path)
+
 def find_project_root(path: str) -> str:
     """Find the root project directory for a given path by looking for repository/project markers, 
     stopping at home or root directories. Prioritizes VCS roots (.git, .hg, .svn) first."""
+    time_bucket = int(time.time() / 60)
+    return _find_project_root_cached(path, time_bucket)
+
+def _find_project_root_impl(path: str) -> str:
     home = os.path.realpath(os.path.abspath(os.path.expanduser("~")))
     
     # Check for Windows UNC paths on the raw path first
