@@ -278,3 +278,23 @@ def test_parser_multiplexer_boundary_resets(tmp_path):
     assert len(commands) == 1
     assert commands[0].command == "git push"
     assert commands[0].timestamp == 1748851210
+
+def test_parser_max_history_age(tmp_path, monkeypatch):
+    import time
+    from unittest.mock import patch
+    
+    now = int(time.time())
+    three_years_ago = now - (3 * 365 * 24 * 60 * 60)
+    
+    temp_file = tmp_path / "zsh_history_age_test"
+    temp_file.write_text(f": {three_years_ago}:0;git status\n")
+    
+    with patch("termstory.config.load_config", return_value={"max_history_age": 5}):
+        cmds = parse_zsh_history(str(temp_file))
+        assert len(cmds) == 1
+        assert cmds[0].command == "git status"
+        
+    with patch("termstory.config.load_config", return_value={"max_history_age": 2}):
+        cmds = parse_zsh_history(str(temp_file))
+        assert len(cmds) == 0
+

@@ -490,3 +490,31 @@ def test_cli_optimize_command(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "Database optimized successfully" in result.stdout
     assert len(optimized) == 1
+
+def test_cli_agy_command(monkeypatch):
+    import shutil
+    import subprocess
+    
+    # Test case 1: agy command exists
+    run_calls = []
+    
+    monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/local/bin/agy" if cmd == "agy" else None)
+    
+    def mock_run(args, **kwargs):
+        run_calls.append(args)
+        return subprocess.CompletedProcess(args, 0)
+    
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    
+    runner = CliRunner()
+    result = runner.invoke(app, ["agy"])
+    assert result.exit_code == 0
+    assert run_calls == [["agy", "-p"]]
+    
+    # Test case 2: agy command does not exist
+    monkeypatch.setattr(shutil, "which", lambda cmd: None)
+    
+    result2 = runner.invoke(app, ["agy"])
+    assert result2.exit_code == 1
+    assert "Error: 'agy' command not found" in result2.stdout or "Error: 'agy' command not found" in result2.stderr
+

@@ -244,5 +244,36 @@ def test_migration_deduplicates_legacy_data(tmp_path):
     assert commands_rows[0][0] == keeper_id
     assert commands_rows[1][0] == keeper_id
 
+def test_database_weekly_vacuum(tmp_path):
+    db_file = tmp_path / "test_vacuum.db"
+    db = Database(str(db_file))
+    db.init_db()
+    
+    # 1. Verify last_vacuum exists in macro_summaries
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT created_at FROM macro_summaries WHERE timeframe_id = 'last_vacuum'")
+    row = cursor.fetchone()
+    assert row is not None
+    initial_ts = row[0]
+    
+    # 2. Update last_vacuum created_at to 8 days ago
+    eight_days_ago = initial_ts - 8 * 24 * 3600
+    cursor.execute("UPDATE macro_summaries SET created_at = ? WHERE timeframe_id = 'last_vacuum'", (eight_days_ago,))
+    conn.commit()
+    conn.close()
+    
+    # 3. Call init_db() again, which should trigger weekly VACUUM and update timestamp
+    db.init_db()
+    
+    # 4. Verify last_vacuum created_at is updated back to close to current time
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT created_at FROM macro_summaries WHERE timeframe_id = 'last_vacuum'")
+    row2 = cursor.fetchone()
+    assert row2 is not None
+    assert row2[0] > eight_days_ago
+    conn.close()
+
 
 

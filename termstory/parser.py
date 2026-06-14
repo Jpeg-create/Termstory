@@ -358,7 +358,9 @@ def parse_zsh_history(
 
     # Standard filtering: drop impossibly old or future-dated commands
     now = int(datetime.now().timestamp())
-    five_years_ago = now - (5 * 365 * 24 * 60 * 60)
+    from termstory.config import load_config
+    max_history_age = load_config().get("max_history_age", 5)
+    five_years_ago = now - (max_history_age * 365 * 24 * 60 * 60)
 
     filtered_commands = [
         cmd for cmd in resolved_commands
@@ -607,13 +609,15 @@ def _assign_missing_timestamps_fallback(
                     
         # Enforce absolute bounds and sort/re-clamp after interpolation
         # to handle negative or massive jumps safely
-        five_years_ago = now - (5 * 365 * 24 * 60 * 60)
+        from termstory.config import load_config
+        max_history_age = load_config().get("max_history_age", 5)
+        five_years_ago = now - (max_history_age * 365 * 24 * 60 * 60)
         for i in range(n):
             if resolved_timestamps[i] < five_years_ago:
                 resolved_timestamps[i] = five_years_ago
             elif resolved_timestamps[i] > now:
                 resolved_timestamps[i] = now
-        resolved_timestamps.sort()
+            resolved_timestamps.sort()
                 
         for idx, (t, cmd) in enumerate(temp_commands):
             fallback_ts = resolved_timestamps[idx]
@@ -625,9 +629,11 @@ def _assign_missing_timestamps_fallback(
                 duration=None
             ))
             
-    # Standard filtering (older than 5 years or future timestamps)
+    # Standard filtering (older than max_history_age or future timestamps)
     now = int(datetime.now().timestamp())
-    five_years_ago = now - (5 * 365 * 24 * 60 * 60)
+    from termstory.config import load_config
+    max_history_age = load_config().get("max_history_age", 5)
+    five_years_ago = now - (max_history_age * 365 * 24 * 60 * 60)
     
     filtered_commands = []
     for cmd in commands_to_return:

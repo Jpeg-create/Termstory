@@ -123,3 +123,19 @@ def test_high_entropy_heuristic():
     redacted2 = redact_command(cmd2)
     assert "[REDACTED_ENTROPY]" not in redacted2
     assert low_entropy_token in redacted2
+
+def test_redact_specific_api_keys():
+    # Google API Key literal
+    assert redact_command("curl AIzaSyD-1234567890_abcdefghijklmnopqrstuv") == "curl [REDACTED_GOOGLE_KEY]"
+    # Anthropic API Key literal
+    assert redact_command("sk-ant-sid01-1234567890abcdef1234567890abcdef12345678") == "[REDACTED_ANTHROPIC_KEY]"
+    # OpenAI API Key (using sk-proj- or longer token)
+    assert redact_command("sk-proj-1234567890abcdef1234567890abcdef1234567890abcdef") == "[REDACTED_OPENAI_KEY]"
+    # DeepSeek API Key literal (sk- followed by 32 chars)
+    assert redact_command("sk-1234567890abcdef1234567890abcdef") == "[REDACTED_DEEPSEEK_KEY]"
+    
+    # Flags and Env vars
+    assert redact_command("my_script.py --google-api-key mysecretkey") == "my_script.py --google-api-key [REDACTED]"
+    assert redact_command("OPENAI_API_KEY=mysecretkey python3 app.py") == "OPENAI_API_KEY=[REDACTED] python3 app.py"
+    assert redact_command("export DEEPSEEK_API_KEY=something") == "export DEEPSEEK_API_KEY=[REDACTED]"
+

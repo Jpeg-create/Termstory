@@ -439,6 +439,25 @@ def optimize_cmd():
     console.print("[bold green]✅ Database optimized successfully![/]")
 
 
+@app.command("agy")
+def run_agy():
+    """Launch 'agy -p' for quick analysis (requires 'agy' command to be installed)"""
+    import shutil
+    import subprocess
+    agy_path = shutil.which("agy")
+    if not agy_path:
+        Console(stderr=True).print("[bold red]Error: 'agy' command not found on PATH.[/]")
+        raise typer.Exit(code=1)
+    
+    try:
+        subprocess.run(["agy", "-p"], check=True)
+    except subprocess.CalledProcessError as e:
+        Console(stderr=True).print(f"[bold red]Error running 'agy -p': {e}[/]")
+        raise typer.Exit(code=e.returncode)
+    except KeyboardInterrupt:
+        raise typer.Exit(code=130)
+
+
 # ==========================================
 # CONFIG SUBCOMMANDS
 # ==========================================
@@ -533,11 +552,24 @@ def config_list():
 app.add_typer(config_app, name="config")
 
 
+def version_callback(value: bool):
+    if value:
+        from termstory import __version__
+        typer.echo(f"termstory version {__version__}")
+        raise typer.Exit()
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
     date: Optional[str] = typer.Option(None, "--date", help="Date override (YYYY-MM-DD) for commands"),
     reset: bool = typer.Option(False, "--reset", help="Reset all TermStory state, configuration, and database"),
+    version: Optional[bool] = typer.Option(
+        None,
+        "--version",
+        callback=version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
 ):
     """TermStory - local shell history parsing and session summaries"""
     if reset:

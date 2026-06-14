@@ -386,6 +386,43 @@ def test_ai_explicit_timeout_override(monkeypatch):
     assert res == "ok"
     assert captured["timeout"] == 15.0
 
+def test_ai_retry_logic(monkeypatch):
+    import time
+    called = []
+    
+    virtual_time = 1700000000.0
+    def mock_time():
+        nonlocal virtual_time
+        return virtual_time
+    def mock_sleep(seconds):
+        nonlocal virtual_time
+        virtual_time += seconds
+        
+    monkeypatch.setattr(time, "time", mock_time)
+    monkeypatch.setattr(time, "sleep", mock_sleep)
+    
+    def mock_urlopen(req, timeout=None):
+        called.append(len(called))
+        if len(called) < 3:
+            raise urllib.error.URLError("Connection reset")
+        resp_payload = {
+            "choices": [{"message": {"content": "Success on 3rd attempt"}}]
+        }
+        return MockResponse(json.dumps(resp_payload).encode("utf-8"))
+        
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    
+    res = generate_ai_summary(
+        ["pytest tests/"],
+        "test-key",
+        "https://api.groq.com/openai/v1",
+        "llama3",
+        "groq"
+    )
+    assert len(called) == 3
+    assert res == "Success on 3rd attempt"
+
+
 
 
 

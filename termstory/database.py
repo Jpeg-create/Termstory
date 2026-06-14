@@ -143,6 +143,22 @@ class Database:
         self._migrate_fts5(cursor)
             
         conn.commit()
+        
+        # Weekly VACUUM check
+        try:
+            cursor.execute("SELECT created_at FROM macro_summaries WHERE timeframe_id = 'last_vacuum'")
+            row = cursor.fetchone()
+            current_time = int(datetime.utcnow().timestamp())
+            if not row or (current_time - row[0]) >= 7 * 24 * 3600:
+                cursor.execute("VACUUM;")
+                cursor.execute("""
+                    INSERT OR REPLACE INTO macro_summaries (timeframe_id, type, summary, created_at)
+                    VALUES ('last_vacuum', 'system', 'vacuum', ?)
+                """, (current_time,))
+                conn.commit()
+        except Exception:
+            pass
+            
         conn.close()
 
     def _migrate_projects_unique_path(self, cursor) -> None:
@@ -485,6 +501,11 @@ class Database:
                     WHERE type = 'command' 
                       AND ref_id NOT IN (SELECT CAST(id AS TEXT) FROM sessions);
                 """)
+
+            cursor.execute("""
+                INSERT OR REPLACE INTO macro_summaries (timeframe_id, type, summary, created_at)
+                VALUES ('last_ingestion', 'system', 'ingestion', ?)
+            """, (int(datetime.now().timestamp()),))
 
             conn.commit()
         except Exception as e:
@@ -876,6 +897,19 @@ class Database:
             cursor.execute("""
                 SELECT summary FROM macro_summaries WHERE timeframe_id = ?
             """, (timeframe_id,))
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+        return row[0] if row else None
+
+    def get_last_ingestion_time(self) -> Optional[int]:
+        """Fetch the timestamp of the last ingestion"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT created_at FROM macro_summaries WHERE timeframe_id = 'last_ingestion'
+            """)
             row = cursor.fetchone()
         finally:
             conn.close()

@@ -85,6 +85,19 @@ SLACK_TOKEN_PATTERN = re.compile(r'\bxoxb-[0-9]{11,13}-[a-zA-Z0-9]{24}\b')
 BEARER_TOKEN_PATTERN = re.compile(r'\bbearer\s+([a-zA-Z0-9\-._~+/]+=*)\b', re.IGNORECASE)
 SSH_PRIVATE_KEY_PATTERN = re.compile(r'-----BEGIN\s+[A-Z ]+\s+PRIVATE\s+KEY-----.*?-----END\s+[A-Z ]+\s+PRIVATE\s+KEY-----', re.DOTALL | re.IGNORECASE)
 
+GOOGLE_API_KEY_PATTERN = re.compile(r'\bAIzaSy[a-zA-Z0-9_-]{30,45}\b')
+OPENAI_API_KEY_PATTERN = re.compile(r'\bsk-[a-zA-Z0-9_-]{32,}\b')
+ANTHROPIC_API_KEY_PATTERN = re.compile(r'\bsk-ant-[a-zA-Z0-9_-]{40,}\b')
+DEEPSEEK_API_KEY_PATTERN = re.compile(r'\bsk-[a-zA-Z0-9_-]{32}\b')
+
+SPECIFIC_API_KEYS_PATTERN = re.compile(
+    r'(\b(?:GOOGLE_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY)\s*=\s*|'
+    r'--(?:google-api-key|openai-api-key|anthropic-api-key|deepseek-api-key)=|'
+    r'(?:^|\s)--(?:google-api-key|openai-api-key|anthropic-api-key|deepseek-api-key)\s+)'
+    r'(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")',
+    re.IGNORECASE
+)
+
 def calculate_entropy(s: str) -> float:
     if not s:
         return 0.0
@@ -114,10 +127,15 @@ def redact_command(cmd: str) -> str:
     # 1. SSH Private Keys
     cmd = SSH_PRIVATE_KEY_PATTERN.sub('[REDACTED_PRIVATE_KEY]', cmd)
     
-    # 2. AWS Keys & Slack Tokens
+    # 2. AWS Keys, Slack Tokens, and AI API Keys
     cmd = AWS_KEY_PATTERN.sub('[REDACTED_AWS_KEY]', cmd)
     cmd = SLACK_TOKEN_PATTERN.sub('[REDACTED_SLACK_TOKEN]', cmd)
     cmd = BEARER_TOKEN_PATTERN.sub('Bearer [REDACTED_TOKEN]', cmd)
+    cmd = GOOGLE_API_KEY_PATTERN.sub('[REDACTED_GOOGLE_KEY]', cmd)
+    cmd = ANTHROPIC_API_KEY_PATTERN.sub('[REDACTED_ANTHROPIC_KEY]', cmd)
+    cmd = DEEPSEEK_API_KEY_PATTERN.sub('[REDACTED_DEEPSEEK_KEY]', cmd)
+    cmd = OPENAI_API_KEY_PATTERN.sub('[REDACTED_OPENAI_KEY]', cmd)
+    cmd = SPECIFIC_API_KEYS_PATTERN.sub(r'\1[REDACTED]', cmd)
     
     # 3. Environment Variable Exports & High-risk Inline Env Vars
     cmd = ENV_EXPORT_PATTERN.sub(r'\1[REDACTED]', cmd)
