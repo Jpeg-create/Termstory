@@ -16,7 +16,13 @@ setup(
         "rich>=13.0.0",
         "textual>=0.50.0",
         "pillow>=10.0.0",
-    ],
+     ],
+    extras_require={
+        "test": [
+            "pytest>=7.0.0",
+            "pytest-asyncio>=0.21.0",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "termstory=termstory.cli:cli",

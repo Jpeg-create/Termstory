@@ -4,16 +4,16 @@ from termstory.backup import backup_db, restore_db
 from termstory.database import Database
 from termstory.models import Project, Session, Command
 
-@pytest.fixture
-def db_path(tmp_path, monkeypatch):
+def test_backup_and_restore(tmp_path, monkeypatch):
+    # Setup temporary database path under tmp_path
     db_file = tmp_path / "test_backup.db"
-    # Patch the environment variable and functions to ensure they return our temporary database path
-    monkeypatch.setenv("DB_PATH", str(db_file))
-    monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
-    monkeypatch.setattr("termstory.backup.get_db_path", lambda: str(db_file))
-    return str(db_file)
+    db_path = str(db_file)
 
-def test_backup_and_restore(db_path, monkeypatch):
+    # Patch the environment variable and functions to ensure they return our temporary database path
+    monkeypatch.setenv("DB_PATH", db_path)
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: db_path)
+    monkeypatch.setattr("termstory.backup.get_db_path", lambda: db_path)
+
     # Initialize database and insert sample data
     db = Database(db_path)
     db.init_db()
