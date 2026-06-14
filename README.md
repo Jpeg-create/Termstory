@@ -688,9 +688,64 @@ termstory projects --sort name       # Alphabetically
 ### Insights
 
 ```bash
-termstory insights           # Focus scores, time-of-day distribution, tool breakdown
-termstory insights --days 90 # Over the last 90 days
+termstory insights           # Executive insights: focus scores, time-of-day distribution, and project focus
 ```
+
+### Stats
+
+```bash
+termstory stats              # Detailed, high-density work statistics and telemetry
+```
+
+### Ask
+
+```bash
+termstory ask "What did I work on last Monday?"  # Natural language queries using BM25 context retrieval
+termstory ask "When did I fix the database deadlocks?"
+```
+
+### Predict
+
+```bash
+termstory predict            # Pre-Cognitive Workspace: predict what you will work on next
+termstory predict --top 5    # Show top 5 predicted projects
+termstory predict --json     # Output predictions as machine-readable JSON
+```
+
+### Replay
+
+```bash
+termstory replay             # Replay the most recent terminal session
+termstory replay 42          # Replay session #42
+termstory replay --speed 2.0 # Fast-forward (2.0x playback speed)
+termstory replay --speed 0.5 # Slow-motion playback (0.5x speed)
+termstory replay --list      # List recent sessions to choose from
+```
+
+### Web
+
+```bash
+termstory web                # Generate and open a beautiful HTML report in your browser
+```
+
+### Export
+
+```bash
+termstory export --format json                           # Export all sessions as JSON to stdout
+termstory export --format csv --output ~/history.csv      # Export as CSV to a file
+termstory export --project myapp --since 7               # Export last 7 days of "myapp" project
+termstory export --since 2026-06-01                      # Export sessions since specific date
+```
+
+### Tags
+
+```bash
+termstory tags               # View summary of session counts and durations per tag (deploy, debug, setup, test, docs)
+termstory tags debug         # List recent sessions tagged with "debug"
+termstory tags test --limit 10 # List top 10 sessions with "test" tag
+termstory tags --rebuild     # Force rebuild/re-evaluate tag classification for all sessions
+```
+
 
 ### TUI
 
