@@ -131,6 +131,10 @@ def run_ingestion(db: Database) -> None:
             commits = get_project_commits(p.path, since_ts, timeout=git_timeout)
             if commits:
                 db.save_commits(p.id, commits)
+                
+    # Auto-tag sessions
+    from termstory.tags import auto_tag_all_sessions
+    auto_tag_all_sessions(db)
 
 @app.command("search")
 def search_history(
@@ -273,6 +277,118 @@ def show_stats():
     output = format_stats_output(db)
     from rich.text import Text
     console.print(Text.from_ansi(output))
+
+
+
+@app.command("tags")
+def show_tags(
+    tag: Optional[str] = typer.Argument(None, help="Filter and list sessions by a specific tag (deploy, debug, setup, test, docs)"),
+    rebuild: bool = typer.Option(False, "--rebuild", "-r", help="Force rebuild/re-evaluate tags for all sessions"),
+    limit: int = typer.Option(50, "--limit", help="Limit number of listed sessions")
+):
+    """View a summary of tags or list sessions for a specific tag"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    
+    if rebuild:
+        console.print("Rebuilding tags for all sessions...")
+        from termstory.tags import auto_tag_all_sessions
+        auto_tag_all_sessions(db)
+        console.print("[bold green]✓ Tags successfully rebuilt![/bold green]")
+        if not tag:
+            # If no tag is given, we will show the updated tag summary
+            pass
+            
+    # Standard ingestion if not rebuild
+    if not rebuild:
+        run_ingestion(db)
+        
+    # Get all projects map for listing
+    cursor = db.get_connection().cursor()
+    cursor.execute("SELECT id, name FROM projects")
+    projects_map = {row[0]: row[1] for row in cursor.fetchall()}
+    
+    if not tag:
+        # Show summary of tags
+        cursor.execute("SELECT id, tags, duration_seconds FROM sessions")
+        rows = cursor.fetchall()
+        
+        tag_counts = {t: 0 for t in ["deploy", "debug", "setup", "test", "docs"]}
+        tag_durations = {t: 0 for t in ["deploy", "debug", "setup", "test", "docs"]}
+        
+        for s_id, tags_str, duration in rows:
+            if tags_str:
+                parts = [p.strip() for p in tags_str.split(",") if p.strip()]
+                for p in parts:
+                    if p in tag_counts:
+                        tag_counts[p] += 1
+                        tag_durations[p] += (duration or 0)
+                        
+        from termstory.models import format_duration
+        
+        output_lines = [
+            "🏷️  TermStory Tags Summary",
+            "────────────────────────────────────────"
+        ]
+        for t in ["deploy", "debug", "setup", "test", "docs"]:
+            count = tag_counts[t]
+            dur = tag_durations[t]
+            output_lines.append(f"{t:<8} : {count:>3} sessions ({format_duration(dur)})")
+            
+        console.print("\n".join(output_lines))
+    else:
+        # List sessions filtered by tag
+        tag = tag.strip().lower()
+        if tag not in ["deploy", "debug", "setup", "test", "docs"]:
+            console.print(f"[bold red]Error: Invalid tag '{tag}'.[/bold red] Valid tags: deploy, debug, setup, test, docs.")
+            raise typer.Exit(1)
+            
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary, tags
+            FROM sessions
+            WHERE tags LIKE ?
+            ORDER BY start_time DESC
+            LIMIT ?
+        """, (f"%{tag}%", limit))
+        session_rows = cursor.fetchall()
+        
+        if not session_rows:
+            console.print(f"No sessions found with tag '{tag}'.")
+            return
+            
+        from termstory.models import format_duration
+        import datetime
+        
+        output_lines = [
+            f"🏷️  Sessions tagged with '{tag}' (Showing top {limit})",
+            "────────────────────────────────────────────────────────────────────────"
+        ]
+        
+        for row in session_rows:
+            s_id, start, end, duration, p_id, ai_sum, tags_str = row
+            date_str = datetime.datetime.fromtimestamp(start).strftime("%Y-%m-%d %H:%M")
+            proj_name = projects_map.get(p_id, "Other")
+            dur_str = format_duration(duration or 0)
+            
+            # Form summary: priority to AI summary, then first command of session
+            summary = ""
+            if ai_sum:
+                summary = ai_sum.replace("\n", " ").strip()
+            else:
+                cursor.execute("SELECT command FROM commands WHERE session_id = ? ORDER BY timestamp ASC LIMIT 1", (s_id,))
+                cmd_row = cursor.fetchone()
+                if cmd_row:
+                    summary = cmd_row[0]
+            
+            if len(summary) > 40:
+                summary = summary[:37] + "..."
+                
+            output_lines.append(f"{date_str}  {proj_name:<15}  {dur_str:<6}  {summary}")
+            
+        console.print("\n".join(output_lines))
 
 
 

@@ -58,6 +58,7 @@ class Database:
             duration_seconds INTEGER,
             project_id INTEGER,
             created_at INTEGER DEFAULT (strftime('%s', 'now')),
+            tags TEXT,
             FOREIGN KEY(project_id) REFERENCES projects(id)
         );
         """)
@@ -118,6 +119,13 @@ class Database:
         # v0.3.0: Add is_legacy column to commands so we can skip them in stats.
         try:
             cursor.execute("ALTER TABLE commands ADD COLUMN is_legacy BOOLEAN DEFAULT 0;")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+            
+        # Add tags column to sessions if not exists
+        try:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN tags TEXT;")
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e).lower():
                 raise
@@ -348,13 +356,13 @@ class Database:
                     
             # --- 2. Save Sessions ---
             # Dedup key is start_time ONLY (stable across runs regardless of project_id changes)
-            cursor.execute("SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary FROM sessions")
+            cursor.execute("SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary, tags FROM sessions")
             db_sessions = {}
             for row in cursor.fetchall():
                 key = row[1]  # start_time only
                 # If there are duplicate legacy sessions, prefer the one with the latest end_time
                 if key not in db_sessions or row[2] > db_sessions[key]["end_time"]:
-                    db_sessions[key] = {"id": row[0], "end_time": row[2], "duration": row[3], "ai_summary": row[5]}
+                    db_sessions[key] = {"id": row[0], "end_time": row[2], "duration": row[3], "ai_summary": row[5], "tags": row[6]}
             
             session_id_map = {}
             
@@ -364,17 +372,19 @@ class Database:
                 if key in db_sessions:
                     db_id = db_sessions[key]["id"]
                     existing_summary = db_sessions[key]["ai_summary"]
-                    # Update end_time, duration, and project_id — but preserve existing ai_summary
+                    existing_tags = db_sessions[key]["tags"]
+                    # Update end_time, duration, and project_id — but preserve existing ai_summary and tags
                     cursor.execute("""
                         UPDATE sessions SET end_time = ?, duration_seconds = ?, project_id = ? WHERE id = ?
                     """, (session.end_time, session.duration_seconds, session.project_id, db_id))
                     session.id = db_id
                     session.ai_summary = existing_summary  # preserve cached AI work
+                    session.tags = existing_tags
                 else:
                     cursor.execute("""
-                        INSERT OR IGNORE INTO sessions (start_time, end_time, duration_seconds, project_id)
-                        VALUES (?, ?, ?, ?)
-                    """, (session.start_time, session.end_time, session.duration_seconds, session.project_id))
+                        INSERT OR IGNORE INTO sessions (start_time, end_time, duration_seconds, project_id, tags)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (session.start_time, session.end_time, session.duration_seconds, session.project_id, session.tags))
                     db_id = cursor.lastrowid
                     if db_id == 0:
                         # INSERT OR IGNORE hit a conflict — fetch the existing row
@@ -525,7 +535,7 @@ class Database:
             
             # 1. Fetch sessions starting today
             cursor.execute("""
-                SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
+                SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary, tags
                 FROM sessions
                 WHERE start_time >= ? AND start_time <= ?
                 ORDER BY start_time ASC
@@ -534,7 +544,7 @@ class Database:
             
             sessions = []
             for row in session_rows:
-                s_id, start, end, duration, p_id, ai_sum = row
+                s_id, start, end, duration, p_id, ai_sum, tags_str = row
     
                 
                 # 2. Fetch all commands for this session, including recovery_source
@@ -588,7 +598,8 @@ class Database:
                     commands=commands,
                     commits=commits,
                     ai_summary=ai_sum,
-                    is_legacy=is_session_legacy
+                    is_legacy=is_session_legacy,
+                    tags=tags_str
                 ))
         finally:
             conn.close()
@@ -646,7 +657,7 @@ class Database:
             
             placeholders = ",".join("?" for _ in session_ids)
             cursor.execute(f"""
-                SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
+                SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary, tags
                 FROM sessions
                 WHERE id IN ({placeholders})
                 ORDER BY start_time ASC
@@ -655,7 +666,7 @@ class Database:
             
             sessions = []
             for row in session_rows:
-                s_id, start, end, duration, p_id, ai_sum = row
+                s_id, start, end, duration, p_id, ai_sum, tags_str = row
                 
                 # Fetch commands including recovery_source for Chain of Custody
                 cursor.execute("""
@@ -707,7 +718,8 @@ class Database:
                     commands=commands,
                     commits=commits,
                     ai_summary=ai_sum,
-                    is_legacy=is_session_legacy
+                    is_legacy=is_session_legacy,
+                    tags=tags_str
                 ))
         finally:
             conn.close()
@@ -720,7 +732,7 @@ class Database:
             cursor = conn.cursor()
             
             cursor.execute("""
-                SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
+                SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary, tags
                 FROM sessions
                 WHERE start_time >= ? AND start_time <= ?
                 ORDER BY start_time ASC
@@ -729,7 +741,7 @@ class Database:
             
             sessions = []
             for row in session_rows:
-                s_id, start, end, duration, p_id, ai_sum = row
+                s_id, start, end, duration, p_id, ai_sum, tags_str = row
     
                 
                 cursor.execute("""
@@ -781,7 +793,8 @@ class Database:
                     commands=commands,
                     commits=commits,
                     ai_summary=ai_sum,
-                    is_legacy=is_session_legacy
+                    is_legacy=is_session_legacy,
+                    tags=tags_str
                 ))
         finally:
             conn.close()
@@ -794,7 +807,7 @@ class Database:
             cursor = conn.cursor()
             
             cursor.execute("""
-                SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
+                SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary, tags
                 FROM sessions
                 WHERE project_id = ? AND start_time >= ?
                 ORDER BY start_time ASC
@@ -803,7 +816,7 @@ class Database:
             
             sessions = []
             for row in session_rows:
-                s_id, start, end, duration, p_id, ai_sum = row
+                s_id, start, end, duration, p_id, ai_sum, tags_str = row
     
                 
                 cursor.execute("""
@@ -855,7 +868,8 @@ class Database:
                     commands=commands,
                     commits=commits,
                     ai_summary=ai_sum,
-                    is_legacy=is_session_legacy
+                    is_legacy=is_session_legacy,
+                    tags=tags_str
                 ))
         finally:
             conn.close()
@@ -882,6 +896,22 @@ class Database:
                             INSERT INTO search_index (content, type, ref_id, project_id, timestamp)
                             VALUES (?, 'session_summary', ?, ?, ?)
                         """, (ai_summary, str(session_id), project_id, start_time))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
+    def save_session_tags(self, session_id: int, tags: str) -> None:
+        """Update a session's tags in the database"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE;")
+            cursor.execute("""
+                UPDATE sessions SET tags = ? WHERE id = ?
+            """, (tags, session_id))
             conn.commit()
         except Exception as e:
             conn.rollback()

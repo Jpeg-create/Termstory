@@ -60,6 +60,7 @@ class Session:
     _cached_date_str: Optional[str] = None
     _cached_start_time_formatted: Optional[str] = None
     is_legacy: bool = False     # True = every command in this session has a synthetic timestamp
+    tags: Optional[str] = None # Added for session tags as comma-separated list
 
     
     @property
