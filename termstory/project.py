@@ -92,16 +92,70 @@ def disambiguate_project_names(projects: List[Project]) -> Dict[int, str]:
                 display_names[p.id] = f"{p.name} ({parent_dir})"
     return display_names
 
+import threading
+
+def _listdir_with_timeout(path: str, timeout: float = 0.5) -> List[str]:
+    """Execute os.listdir in a daemon thread to enforce a timeout (e.g. on hung NFS mounts)"""
+    result = []
+    exception_container = [None]
+
+    def target():
+        try:
+            result.extend(os.listdir(path))
+        except Exception as e:
+            exception_container[0] = e
+
+    t = threading.Thread(target=target)
+    t.daemon = True
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(f"os.listdir timed out on path: {path}")
+    if exception_container[0] is not None:
+        raise exception_container[0]
+    return result
+
 def find_project_root(path: str) -> str:
     """Find the root project directory for a given path by looking for repository/project markers, 
     stopping at home or root directories. Prioritizes VCS roots (.git, .hg, .svn) first."""
+    home = os.path.realpath(os.path.abspath(os.path.expanduser("~")))
+    
+    # Check for Windows UNC paths on the raw path first
+    if path.startswith(r"\\") or path.startswith(r"//"):
+        return home
+
     # Expand and make absolute, resolve symlinks
     abs_path = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
-    home = os.path.realpath(os.path.abspath(os.path.expanduser("~")))
     
     # If the path is home or root, just return it
     if abs_path == home or abs_path == "/":
         return abs_path
+
+    # Check for NFS/SMB network mounts and Windows UNC paths
+    from termstory.config import load_config
+    try:
+        config = load_config()
+    except Exception:
+        config = {}
+    whitelist = config.get("network_mount_whitelist", [])
+
+    is_network = False
+    blacklist_prefixes = ["/mnt", "/Volumes/smb"]
+    for prefix in blacklist_prefixes:
+        if abs_path == prefix or abs_path.startswith(prefix + "/"):
+            is_network = True
+            break
+
+    if is_network:
+        # Check if whitelisted
+        whitelisted = False
+        for wl_path in whitelist:
+            wl_abs = os.path.realpath(os.path.abspath(os.path.expanduser(wl_path)))
+            if abs_path == wl_abs or abs_path.startswith(wl_abs + "/") or abs_path.startswith(wl_abs + "\\"):
+                whitelisted = True
+                break
+        if not whitelisted:
+            return home
 
     max_depth = 50
 
@@ -112,7 +166,7 @@ def find_project_root(path: str) -> str:
     while current and current != home and current != "/" and depth < max_depth:
         depth += 1
         try:
-            files = os.listdir(current)
+            files = _listdir_with_timeout(current, timeout=0.5)
             if any(marker in files for marker in vcs_markers):
                 return current
         except Exception:
@@ -134,7 +188,7 @@ def find_project_root(path: str) -> str:
     while current and current != home and current != "/" and depth < max_depth:
         depth += 1
         try:
-            files = os.listdir(current)
+            files = _listdir_with_timeout(current, timeout=0.5)
             if any(marker in files for marker in project_markers):
                 return current
         except Exception:

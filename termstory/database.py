@@ -120,6 +120,9 @@ class Database:
         
         # One-time migration: clean up duplicate sessions/commands and create unique indexes
         self._migrate_deduplicate_sessions(cursor)
+
+        # One-time migration: initialize and populate FTS5 search index if supported
+        self._migrate_fts5(cursor)
             
         conn.commit()
         conn.close()
@@ -423,6 +426,48 @@ class Database:
                 DELETE FROM sessions 
                 WHERE id NOT IN (SELECT DISTINCT session_id FROM commands WHERE session_id IS NOT NULL);
             """)
+
+            # If FTS5 is supported, sync updated/inserted commands and sessions
+            if self._is_fts_enabled(cursor):
+                affected_session_ids = set()
+                for cmd in commands:
+                    if cmd.session_id is not None:
+                        affected_session_ids.add(cmd.session_id)
+                for db_c in db_cmds.values():
+                    if db_c["session_id"] is not None:
+                        affected_session_ids.add(db_c["session_id"])
+                        
+                for session_id in affected_session_ids:
+                    cursor.execute("DELETE FROM search_index WHERE type = 'command' AND ref_id = ?", (str(session_id),))
+                    cursor.execute("""
+                        INSERT INTO search_index (content, type, ref_id, project_id, timestamp)
+                        SELECT command, 'command', CAST(session_id AS TEXT), project_id, timestamp
+                        FROM commands
+                        WHERE session_id = ? AND session_id IS NOT NULL;
+                    """, (session_id,))
+                
+                # Sync session summaries for all sessions passed in
+                for session in sessions:
+                    if session.id is not None:
+                        cursor.execute("DELETE FROM search_index WHERE type = 'session_summary' AND ref_id = ?", (str(session.id),))
+                        if session.ai_summary:
+                            cursor.execute("""
+                                INSERT INTO search_index (content, type, ref_id, project_id, timestamp)
+                                VALUES (?, 'session_summary', ?, ?, ?)
+                            """, (session.ai_summary, str(session.id), session.project_id, session.start_time))
+                            
+                # Clean up any session summaries/commands for deleted sessions
+                cursor.execute("""
+                    DELETE FROM search_index 
+                    WHERE type = 'session_summary' 
+                      AND ref_id NOT IN (SELECT CAST(id AS TEXT) FROM sessions);
+                """)
+                cursor.execute("""
+                    DELETE FROM search_index 
+                    WHERE type = 'command' 
+                      AND ref_id NOT IN (SELECT CAST(id AS TEXT) FROM sessions);
+                """)
+
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -786,6 +831,18 @@ class Database:
             cursor.execute("""
                 UPDATE sessions SET ai_summary = ? WHERE id = ?
             """, (ai_summary, session_id))
+            
+            if self._is_fts_enabled(cursor):
+                cursor.execute("SELECT project_id, start_time FROM sessions WHERE id = ?", (session_id,))
+                row = cursor.fetchone()
+                if row:
+                    project_id, start_time = row
+                    cursor.execute("DELETE FROM search_index WHERE type = 'session_summary' AND ref_id = ?", (str(session_id),))
+                    if ai_summary:
+                        cursor.execute("""
+                            INSERT INTO search_index (content, type, ref_id, project_id, timestamp)
+                            VALUES (?, 'session_summary', ?, ?, ?)
+                        """, (ai_summary, str(session_id), project_id, start_time))
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -922,6 +979,14 @@ class Database:
                 VALUES (?, ?, ?, ?, ?)
             """, commit_rows)
             
+            if self._is_fts_enabled(cursor):
+                for c in commits:
+                    cursor.execute("DELETE FROM search_index WHERE type = 'commit' AND ref_id = ?", (c["hash"],))
+                    cursor.execute("""
+                        INSERT INTO search_index (content, type, ref_id, project_id, timestamp)
+                        VALUES (?, 'commit', ?, ?, ?)
+                    """, (c["cleaned_message"], c["hash"], project_id, c["timestamp"]))
+            
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -973,6 +1038,19 @@ class Database:
 
     def search_sessions(self, query: str, project_filter: Optional[str] = None, since_ts: Optional[int] = None) -> List[Dict]:
         """Query sessions containing matching commands, matching project names, or matching commits"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            fts_enabled = self._is_fts_enabled(cursor)
+        finally:
+            conn.close()
+            
+        if fts_enabled:
+            try:
+                return self.search_fts5(query, project_filter, since_ts)
+            except sqlite3.OperationalError:
+                pass
+
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
@@ -1073,3 +1151,159 @@ class Database:
             conn.execute("VACUUM;")
         finally:
             conn.close()
+
+    def _is_fts_enabled(self, cursor) -> bool:
+        """Check if FTS5 is supported and search_index table exists"""
+        try:
+            cursor.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='search_index';")
+            return cursor.fetchone() is not None
+        except Exception:
+            return False
+
+    def _migrate_fts5(self, cursor) -> None:
+        """Create and populate FTS5 search_index virtual table if supported"""
+        cursor.execute("PRAGMA compile_options;")
+        options = [row[0] for row in cursor.fetchall()]
+        if not any('FTS5' in opt for opt in options):
+            return
+
+        cursor.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
+            content,
+            type UNINDEXED,
+            ref_id UNINDEXED,
+            project_id UNINDEXED,
+            timestamp UNINDEXED
+        );
+        """)
+
+        cursor.execute("SELECT COUNT(*) FROM search_index LIMIT 1;")
+        count = cursor.fetchone()[0]
+        if count == 0:
+            cursor.execute("""
+                INSERT INTO search_index (content, type, ref_id, project_id, timestamp)
+                SELECT command, 'command', CAST(session_id AS TEXT), project_id, timestamp 
+                FROM commands 
+                WHERE session_id IS NOT NULL;
+            """)
+            
+            cursor.execute("""
+                INSERT INTO search_index (content, type, ref_id, project_id, timestamp)
+                SELECT cleaned_message, 'commit', hash, project_id, timestamp 
+                FROM commits;
+            """)
+            
+            cursor.execute("""
+                INSERT INTO search_index (content, type, ref_id, project_id, timestamp)
+                SELECT ai_summary, 'session_summary', CAST(id AS TEXT), project_id, start_time 
+                FROM sessions 
+                WHERE ai_summary IS NOT NULL;
+            """)
+
+    def search_fts5(self, query: str, project_filter: Optional[str] = None, since_ts: Optional[int] = None) -> List[Dict]:
+        """Ranked full-text search across sessions, commands, and commits using FTS5 virtual table"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            terms = query.split()
+            sanitized_terms = []
+            for term in terms:
+                clean_term = term.replace('"', '""')
+                if clean_term:
+                    sanitized_terms.append(f'"{clean_term}"*')
+            fts_query = " ".join(sanitized_terms)
+            
+            if not fts_query:
+                return []
+                
+            query_val = f"%{query}%"
+            
+            sql = """
+                WITH fts_matches AS (
+                    SELECT type, ref_id, project_id, timestamp, rank
+                    FROM search_index
+                    WHERE search_index MATCH ?
+                )
+                SELECT s.id, s.start_time, s.end_time, s.duration_seconds, s.project_id, p.name, p.path, s.ai_summary,
+                       MIN(f.rank) as min_rank
+                FROM sessions s
+                LEFT JOIN projects p ON s.project_id = p.id
+                LEFT JOIN fts_matches f ON (
+                    (f.type = 'session_summary' AND CAST(f.ref_id AS INTEGER) = s.id)
+                    OR (f.type = 'command' AND CAST(f.ref_id AS INTEGER) = s.id)
+                    OR (f.type = 'commit' AND s.project_id = CAST(f.project_id AS INTEGER) 
+                        AND CAST(f.timestamp AS INTEGER) >= s.start_time - 300 
+                        AND CAST(f.timestamp AS INTEGER) <= s.end_time + 600)
+                )
+                WHERE (f.rank IS NOT NULL OR p.name LIKE ?)
+            """
+            params = [fts_query, query_val]
+            
+            if project_filter:
+                sql += " AND p.name LIKE ?"
+                params.append(f"%{project_filter}%")
+                
+            if since_ts:
+                sql += " AND s.start_time >= ?"
+                params.append(since_ts)
+                
+            sql += " GROUP BY s.id ORDER BY CASE WHEN MIN(f.rank) IS NOT NULL THEN 0 ELSE 1 END, MIN(f.rank) ASC, s.start_time DESC"
+            
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            
+            results = []
+            for row in rows:
+                s_id, start_time, end_time, duration, p_id, p_name, p_path, ai_sum, _rank = row
+                
+                # Fetch all commands in this session
+                cursor.execute("""
+                    SELECT command FROM commands WHERE session_id = ? ORDER BY timestamp ASC
+                """, (s_id,))
+                all_cmds = [r[0] for r in cursor.fetchall()]
+                
+                # Fetch matching commands in this session
+                cursor.execute("""
+                    SELECT command FROM commands WHERE session_id = ? AND command LIKE ? ORDER BY timestamp ASC
+                """, (s_id, query_val))
+                matching_cmds = [r[0] for r in cursor.fetchall()]
+                
+                # Fetch all commits in this session (using buffer)
+                all_commits = []
+                matching_commits = []
+                if p_id is not None:
+                    cursor.execute("""
+                        SELECT hash, timestamp, message, cleaned_message 
+                        FROM commits 
+                        WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
+                        ORDER BY timestamp ASC
+                    """, (p_id, start_time - 300, end_time + 600))
+                    for c_row in cursor.fetchall():
+                        c_dict = {
+                            "hash": c_row[0],
+                            "timestamp": c_row[1],
+                            "message": c_row[2],
+                            "cleaned_message": c_row[3]
+                        }
+                        all_commits.append(c_dict)
+                        if query.lower() in c_row[2].lower() or query.lower() in c_row[3].lower():
+                            matching_commits.append(c_dict)
+                            
+                results.append({
+                    "session_id": s_id,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "duration_seconds": duration,
+                    "project_id": p_id,
+                    "project_name": p_name or "General / No Project",
+                    "project_path": p_path or "",
+                    "ai_summary": ai_sum,
+                    "all_commands": all_cmds,
+                    "matching_commands": matching_cmds,
+                    "all_commits": all_commits,
+                    "matching_commits": matching_commits
+                })
+        finally:
+            conn.close()
+        return results

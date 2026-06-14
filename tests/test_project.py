@@ -250,3 +250,49 @@ def test_git_command_inference_without_cd():
     # Session 2 should be assigned to same project via git command inference
     assert s2.project_id is not None
     assert s2.project_id == s1.project_id
+
+def test_find_project_root_network_mounts_and_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr("os.path.expanduser", lambda path: str(tmp_path) if path == "~" else path)
+    
+    from termstory.project import find_project_root
+    
+    # 1. Test blacklisted prefixes (not whitelisted)
+    assert find_project_root("/mnt/stale_nfs") == str(tmp_path)
+    assert find_project_root("/Volumes/smb/stale_smb") == str(tmp_path)
+    assert find_project_root(r"\\Server\Share") == str(tmp_path)
+    
+    # 2. Test whitelist configuration
+    import json
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = config_dir / "config.json"
+    config_data = {
+        "network_mount_whitelist": ["/mnt/my_safe_nfs"]
+    }
+    with open(config_file, "w") as f:
+        json.dump(config_data, f)
+        
+    # We mock get_app_dir to point to this tmp config dir
+    monkeypatch.setattr("termstory.config.get_app_dir", lambda dir_type: str(config_dir))
+    
+    # Check that whitelisted path is NOT immediately returned as home
+    # but instead it attempts listdir (and falls back to home because path doesn't exist)
+    assert find_project_root("/mnt/my_safe_nfs/non_existent_folder") == str(tmp_path)
+
+    # 3. Test listdir timeout/hang
+    import time
+    def mock_listdir_slow(path):
+        time.sleep(1.0)
+        return []
+    
+    # Create a real directory that is NOT network blacklisted
+    local_dir = tmp_path / "Projects" / "local-project"
+    local_dir.mkdir(parents=True, exist_ok=True)
+    
+    monkeypatch.setattr("os.listdir", mock_listdir_slow)
+    # Because listing local_dir times out, it should gracefully fall back to home instead of hanging
+    t0 = time.time()
+    res = find_project_root(str(local_dir))
+    t1 = time.time()
+    assert res == str(local_dir)
+    assert t1 - t0 < 3.0  # Timeout prevents 4 calls from taking 4.0s (mock listdir sleeps 1.0s per call, 4 calls = 4.0s)

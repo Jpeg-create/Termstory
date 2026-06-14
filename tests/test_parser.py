@@ -249,3 +249,32 @@ def test_parse_powershell_history(tmp_path):
     assert len(commands) == 2
     assert commands[0].command == "git status"
     assert commands[1].command == "docker ps ` -a"
+
+def test_parser_multiplexer_boundary_resets(tmp_path):
+    # Zsh multiline interrupted by kitty +kitten
+    zsh_file = tmp_path / "zsh_multiplexer"
+    zsh_file.write_text(
+        ": 1748851200:0;git commit \\\n"
+        "kitty +kitten themes\n"
+        ": 1748851210:0;git push\n"
+    )
+    commands = parse_zsh_history(str(zsh_file))
+    # The interrupted command should be discarded due to multiplexer boundary reset,
+    # and the next command should be parsed successfully.
+    assert len(commands) == 1
+    assert commands[0].command == "git push"
+    assert commands[0].timestamp == 1748851210
+
+    # Bash multiline interrupted by prompt_command
+    bash_file = tmp_path / "bash_multiplexer"
+    bash_file.write_text(
+        "#1748851200\n"
+        "git commit \\\n"
+        "__vte_prompt_command\n"
+        "#1748851210\n"
+        "git push\n"
+    )
+    commands = parse_bash_history(str(bash_file))
+    assert len(commands) == 1
+    assert commands[0].command == "git push"
+    assert commands[0].timestamp == 1748851210

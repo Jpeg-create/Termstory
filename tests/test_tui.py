@@ -1026,3 +1026,79 @@ async def test_tui_api_key_validation():
         
         # Should now dismiss successfully
         assert len(app.screen_stack) == 1
+
+@pytest.mark.asyncio
+async def test_tui_worker_cancellation(monkeypatch):
+    import tempfile
+    import os
+    import time
+    import asyncio
+    from termstory.database import Database
+    from termstory.models import Session, Command
+    from termstory.tui import TermStoryWorkspace
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+        
+        # Ingest one session
+        from termstory.models import Project
+        now_t = int(time.time())
+        p = Project(id=1, name="test-proj", path="/path/to/test-proj", first_seen=now_t, last_seen=now_t, session_count=1, total_time=60)
+        cmd = Command(timestamp=now_t, command="git commit", exit_code=0, session_id=1, project_id=1)
+        s = Session(id=1, project_id=1, start_time=now_t-60, end_time=now_t, duration_seconds=60, commands=[cmd])
+        db.save_data([p], [s], [cmd])
+        
+        app = TermStoryWorkspace(
+            db,
+            days_limit=30,
+            config_override={
+                "has_seen_onboarding": True,
+                "ai_enabled": True,
+                "active_provider": "openai",
+                "providers": {
+                    "openai": {
+                        "api_key": "fake-key",
+                        "api_base_url": "http://localhost:8080",
+                        "model_name": "gpt-4"
+                    }
+                }
+            }
+        )
+        
+        called_cancel = []
+        def mock_generate_ai_summary(*args, **kwargs):
+            from textual.worker import get_current_worker
+            worker = get_current_worker()
+            for _ in range(50):
+                if worker.is_cancelled:
+                    called_cancel.append(True)
+                    return None
+                time.sleep(0.01)
+            return "AI Summary"
+            
+        monkeypatch.setattr("termstory.tui.generate_ai_summary", mock_generate_ai_summary)
+        
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            
+            # Start generation
+            app.generate_single_session_story(app.sessions[0])
+            # Wait briefly for thread to enter the mock generate function
+            await asyncio.sleep(0.05)
+            # Immediately cancel the worker
+            for worker in app.workers:
+                if worker.name == "generate_single_session_story":
+                    worker.cancel()
+            
+            await pilot.pause()
+            await asyncio.sleep(0.2)
+            
+            # Since the worker was cancelled, the generation should be aborted,
+            # no summary saved, and not marked as failed.
+            assert len(called_cancel) > 0
+            assert app.sessions[0].ai_summary is None
+            assert not getattr(app.sessions[0], "generation_failed", False)
+
+

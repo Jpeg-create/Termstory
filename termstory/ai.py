@@ -32,6 +32,17 @@ def clear_last_ai_error() -> None:
     if hasattr(_local_ai_state, "last_error"):
         delattr(_local_ai_state, "last_error")
 
+def _is_current_worker_cancelled() -> bool:
+    try:
+        from textual.worker import get_current_worker, NoActiveWorker
+        try:
+            worker = get_current_worker()
+            return worker.is_cancelled
+        except NoActiveWorker:
+            return False
+    except ImportError:
+        return False
+
 def _send_llm_request(
     prompt: str,
     api_key: str,
@@ -43,6 +54,9 @@ def _send_llm_request(
 ) -> Optional[str]:
     """Shared helper to construct and send the OpenAI-compatible chat completion request."""
     _local_ai_state.last_error = None
+
+    if _is_current_worker_cancelled():
+        return None
 
     if provider == "disabled":
         return None
@@ -111,8 +125,18 @@ def _send_llm_request(
     worker_thread.start()
     
     # Strict wall-clock timeout wrapper using threading
-    worker_thread.join(timeout + 1.0)
-    
+    start_time = time.time()
+    join_timeout = timeout + 1.0
+    while worker_thread.is_alive():
+        if _is_current_worker_cancelled():
+            return None
+        worker_thread.join(0.05)
+        if time.time() - start_time > join_timeout:
+            break
+            
+    if _is_current_worker_cancelled():
+        return None
+        
     if worker_thread.is_alive():
         # Half-open socket zombie or severe hang detected
         with _circuit_breaker_lock:

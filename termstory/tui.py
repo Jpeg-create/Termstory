@@ -26,6 +26,18 @@ from termstory.config import load_config, save_config
 from termstory.ai import generate_ai_summary, generate_timeframe_summary, generate_daily_chronicle, generate_wrapped_summary
 from termstory.insights import calculate_focus_score, calculate_time_of_day_distribution
 
+def is_worker_cancelled() -> bool:
+    try:
+        from textual.worker import get_current_worker, NoActiveWorker
+        try:
+            worker = get_current_worker()
+            return worker.is_cancelled
+        except NoActiveWorker:
+            return False
+    except ImportError:
+        return False
+
+
 
 # ==========================================
 # 1. HELPER LOGIC FOR STATS & MEMORIES
@@ -1003,7 +1015,13 @@ class DetailsCanvas(VerticalScroll):
 
     @work(thread=True, exclusive=True)
     def _calculate_wrapped_telemetry(self, season_name: str, timeframe_id: str, sessions: List[Session], projects: List[Project]) -> None:
+        from textual.worker import get_current_worker
+        worker = get_current_worker()
+        if worker.is_cancelled:
+            return
         telemetry = self.app.get_month_wrapped_telemetry(timeframe_id)
+        if worker.is_cancelled:
+            return
         self.app.call_from_thread(self._render_wrapped_view_ui, season_name, timeframe_id, sessions, projects, telemetry)
 
     def _render_wrapped_view_ui(
@@ -1993,6 +2011,13 @@ class TermStoryWorkspace(App):
         if provider in ("groq", "openai") and not api_key:
             return
 
+        from textual.worker import get_current_worker
+        worker = get_current_worker()
+        if worker.is_cancelled:
+            session.is_generating_story = False
+            self.call_from_thread(self.refresh_details_canvas)
+            return
+
         session.is_generating_story = True
         self.call_from_thread(self.refresh_details_canvas)
 
@@ -2006,6 +2031,11 @@ class TermStoryWorkspace(App):
         session_commits = [c.get("cleaned_message") or c.get("message") or "" for c in session.commits]
         session_commits = [c.strip() for c in session_commits if c.strip()]
         
+        if worker.is_cancelled:
+            session.is_generating_story = False
+            self.call_from_thread(self.refresh_details_canvas)
+            return
+
         summary = generate_ai_summary(
             commands=commands,
             api_key=api_key,
@@ -2015,6 +2045,11 @@ class TermStoryWorkspace(App):
             project_name=proj_name,
             commits=session_commits
         )
+
+        if worker.is_cancelled:
+            session.is_generating_story = False
+            self.call_from_thread(self.refresh_details_canvas)
+            return
 
         session.is_generating_story = False
         if summary:
@@ -2049,6 +2084,11 @@ class TermStoryWorkspace(App):
 
     @work(thread=True, exclusive=True)
     def generate_timeframe_executive_review(self, timeframe_id: str, timeframe_type: str, stats_summary: str) -> None:
+        from textual.worker import get_current_worker
+        worker = get_current_worker()
+        if worker.is_cancelled:
+            return
+
         provider = self.config.get("active_provider", "disabled")
         if provider == "disabled":
             return
@@ -2071,6 +2111,11 @@ class TermStoryWorkspace(App):
         except Exception:
             pass
         self.call_from_thread(self.refresh_details_canvas)
+        
+        if worker.is_cancelled:
+            self.generating_reviews.discard(timeframe_id)
+            self.call_from_thread(self.refresh_details_canvas)
+            return
         
         if timeframe_type == "date":
             operator = get_operator_handle()
@@ -2120,6 +2165,11 @@ class TermStoryWorkspace(App):
                 provider=provider
             )
         
+        if worker.is_cancelled:
+            self.generating_reviews.discard(timeframe_id)
+            self.call_from_thread(self.refresh_details_canvas)
+            return
+
         self.generating_reviews.discard(timeframe_id)
         if summary:
             self.db.save_macro_summary(timeframe_id, timeframe_type, summary)
@@ -2136,6 +2186,35 @@ class TermStoryWorkspace(App):
         """Calculate telemetry stats for the TermStory Wrapped monthly report."""
         import calendar
         from datetime import datetime
+        
+        default_ret = {
+            "github_username": "Other",
+            "archetype": "Other",
+            "focus_hours": 0.0,
+            "active_days": 0,
+            "since_ts": 0,
+            "until_ts": 0,
+            "project_seconds": {},
+            "git_stats": {"additions": 0, "deletions": 0, "merged_branches": []},
+            "additions": 0,
+            "deletions": 0,
+            "merged_prs": 0,
+            "branch_names_list": "",
+            "cleaned_commits_block": "",
+            "project_distributions_percentages": {},
+            "top_editor_buffers_with_durations": [],
+            "amends_count": 0,
+            "midnight_percentage": 0,
+            "success_rate": 100.0,
+            "failed_builds": 0,
+            "passed_builds": 0,
+            "tool_keywords_list": [],
+            "redacted_secrets_count": 0,
+            "top_buffers_raw": []
+        }
+        
+        if is_worker_cancelled():
+            return default_ret
         
         if timeframe_id == "overall":
             matched_sessions = self.sessions
@@ -2176,8 +2255,14 @@ class TermStoryWorkspace(App):
         if not active_projects:
             active_projects = self.projects
             
+        if is_worker_cancelled():
+            return default_ret
+            
         git_stats = get_timeframe_git_stats([p.path for p in active_projects], since_ts, until_ts)
         
+        if is_worker_cancelled():
+            return default_ret
+            
         additions = git_stats["additions"]
         deletions = git_stats["deletions"]
         merged_branches = git_stats["merged_branches"]
@@ -2217,6 +2302,8 @@ class TermStoryWorkspace(App):
         editor_executables = {"vim", "vi", "nano", "emacs", "code"}
         
         for s in matched_sessions:
+            if is_worker_cancelled():
+                return default_ret
             for cmd in s.commands:
                 total_commands += 1
                 cmd_str = cmd.command
@@ -2351,6 +2438,11 @@ class TermStoryWorkspace(App):
 
     @work(thread=True, exclusive=True)
     def bulk_generate_sessions_stories(self, timeframe_id: str, timeframe_type: str, sessions_to_summarize: List[Session]) -> None:
+        from textual.worker import get_current_worker
+        worker = get_current_worker()
+        if worker.is_cancelled:
+            return
+
         import time
         provider = self.config.get("active_provider", "disabled")
         if provider == "disabled":
@@ -2401,6 +2493,11 @@ class TermStoryWorkspace(App):
                 project_name=proj_name,
                 commits=session_commits
             )
+            
+            if worker.is_cancelled:
+                session.is_generating_story = False
+                aborted = True
+                break
             
             session.is_generating_story = False
             if summary:
