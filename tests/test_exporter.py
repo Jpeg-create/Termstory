@@ -213,9 +213,9 @@ def test_cli_export_command(tmp_path, monkeypatch):
     # Test filter matching nothing
     result_empty = runner.invoke(app, ["export", "--project", "non-existent"])
     assert result_empty.exit_code == 0
-    assert "No sessions found matching filters" in result_empty.stdout
+    assert "No sessions found matching filters" in result_empty.stderr
     
     # Test invalid format
     result_invalid = runner.invoke(app, ["export", "--format", "xml"])
     assert result_invalid.exit_code == 1
-    assert "Error: Unsupported format" in result_invalid.stdout
+    assert "Error: Unsupported format" in result_invalid.stderr

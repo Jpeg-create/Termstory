@@ -1,7 +1,11 @@
 import os
+
 import typer
 from typing import Optional, List
 from dateutil import parser as date_parser
+
+# Supported tags for session categorization
+TAGS = ["deploy", "debug", "setup", "test", "docs"]
 
 from termstory.config import get_history_files, get_db_path
 from termstory.parser import parse_all_histories
@@ -174,8 +178,8 @@ def search_history(
         tag_list = []
         for t in tag:
             t_clean = t.strip().lower()
-            if t_clean not in ["deploy", "debug", "setup", "test", "docs"]:
-                Console(stderr=True).print(f"[bold red]Error: Invalid tag '{t_clean}'.[/bold red] Valid tags: deploy, debug, setup, test, docs.")
+            if t_clean not in TAGS:
+                Console(stderr=True).print(f"[bold red]Error: Invalid tag '{t_clean}'.[/bold red] Valid tags: {', '.join(TAGS)}.")
                 raise typer.Exit(code=1)
             tag_list.append(t_clean)
             
@@ -343,8 +347,8 @@ def show_tags(
         cursor.execute("SELECT id, tags, duration_seconds FROM sessions")
         rows = cursor.fetchall()
         
-        tag_counts = {t: 0 for t in ["deploy", "debug", "setup", "test", "docs"]}
-        tag_durations = {t: 0 for t in ["deploy", "debug", "setup", "test", "docs"]}
+        tag_counts = {t: 0 for t in TAGS}
+        tag_durations = {t: 0 for t in TAGS}
         
         for s_id, tags_str, duration in rows:
             if tags_str:
@@ -360,7 +364,7 @@ def show_tags(
             "🏷️  TermStory Tags Summary",
             "────────────────────────────────────────"
         ]
-        for t in ["deploy", "debug", "setup", "test", "docs"]:
+        for t in TAGS:
             count = tag_counts[t]
             dur = tag_durations[t]
             output_lines.append(f"{t:<8} : {count:>3} sessions ({format_duration(dur)})")
@@ -369,8 +373,8 @@ def show_tags(
     else:
         # List sessions filtered by tag
         tag = tag.strip().lower()
-        if tag not in ["deploy", "debug", "setup", "test", "docs"]:
-            console.print(f"[bold red]Error: Invalid tag '{tag}'.[/bold red] Valid tags: deploy, debug, setup, test, docs.")
+        if tag not in TAGS:
+            console.print(f"[bold red]Error: Invalid tag '{tag}'.[/bold red] Valid tags: {', '.join(TAGS)}.")
             raise typer.Exit(1)
             
         conn = db.get_connection()
