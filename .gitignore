@@ -32,6 +32,7 @@ MANIFEST
 *.db-shm
 *.db-wal
 *.bak
+test_stress.db
 
 # Environments
 .env
@@ -46,3 +47,4 @@ venv.bak/
 .pytest_cache/
 .coverage
 htmlcov/
+.batch-*
