@@ -186,7 +186,8 @@ def test_cli_search_semantic_missing_dependency(tmp_path, monkeypatch):
     runner = CliRunner()
     result = runner.invoke(app, ["search", "health", "--semantic"])
     assert result.exit_code == 1
-    assert "sentence-transformers" in result.stdout.lower()
+    combined = result.output.lower()
+    assert "sentence-transformers" in combined
 
 
 def test_cli_search_semantic_missing_query(tmp_path, monkeypatch):
