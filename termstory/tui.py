@@ -22,7 +22,7 @@ def _handle_exception(exc_type, exc, tb):
             traceback.print_exception(exc_type, exc, tb, file=f)
     except Exception as log_exc:
         console.print(
-            f"[yellow]Warning: could not write error log to {log_path}: "
+            f"[yellow]Warning: could not write error log to {escape(str(log_path))}: "
             f"{type(log_exc).__name__}: {escape(str(log_exc))}[/yellow]"
         )
 
